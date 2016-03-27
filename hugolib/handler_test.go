@@ -47,16 +47,15 @@ func TestDefaultHandler(t *testing.T) {
 
 	s := &Site{
 		Source:  &source.InMemorySource{ByteSource: sources},
-		Targets: targetList{Page: &target.PagePub{UglyURLs: true}},
+		targets: targetList{page: &target.PagePub{UglyURLs: true}},
 	}
 
 	s.initializeSiteInfo()
-	// From site_test.go
-	templatePrep(s)
 
-	must(s.addTemplate("_default/single.html", "{{.Content}}"))
-	must(s.addTemplate("head", "<head><script src=\"script.js\"></script></head>"))
-	must(s.addTemplate("head_abs", "<head><script src=\"/script.js\"></script></head>"))
+	s.prepTemplates(
+		"_default/single.html", "{{.Content}}",
+		"head", "<head><script src=\"script.js\"></script></head>",
+		"head_abs", "<head><script src=\"/script.js\"></script></head>")
 
 	// From site_test.go
 	createAndRenderPages(t, s)

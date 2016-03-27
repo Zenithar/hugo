@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"bitbucket.org/pkg/inflect"
 
@@ -29,7 +30,6 @@ import (
 	"github.com/spf13/hugo/hugofs"
 	"github.com/spf13/hugo/source"
 	"github.com/spf13/hugo/target"
-	"github.com/spf13/hugo/tpl"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
@@ -41,18 +41,11 @@ title: simple template
 ---
 content`
 
-	TEMPLATE_MISSING_FUNC        = "{{ .Title | funcdoesnotexists }}"
-	TEMPLATE_FUNC                = "{{ .Title | urlize }}"
-	TEMPLATE_CONTENT             = "{{ .Content }}"
-	TEMPLATE_DATE                = "{{ .Date }}"
-	INVALID_TEMPLATE_FORMAT_DATE = "{{ .Date.Format time.RFC3339 }}"
-	TEMPLATE_WITH_URL_REL        = "<a href=\"foobar.jpg\">Going</a>"
-	TEMPLATE_WITH_URL_ABS        = "<a href=\"/foobar.jpg\">Going</a>"
-	PAGE_URL_SPECIFIED           = `---
-title: simple template
-url: "mycategory/my-whatever-content/"
----
-content`
+	TEMPLATE_MISSING_FUNC = "{{ .Title | funcdoesnotexists }}"
+	TEMPLATE_FUNC         = "{{ .Title | urlize }}"
+	TEMPLATE_CONTENT      = "{{ .Content }}"
+	TEMPLATE_DATE         = "{{ .Date }}"
+	TEMPLATE_WITH_URL_ABS = "<a href=\"/foobar.jpg\">Going</a>"
 
 	PAGE_WITH_MD = `---
 title: page with md
@@ -63,6 +56,41 @@ text
 more text
 `
 )
+
+func init() {
+	testMode = true
+}
+
+// Issue #1797
+func TestReadPagesFromSourceWithEmptySource(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+
+	viper.Set("DefaultExtension", "html")
+	viper.Set("verbose", true)
+	viper.Set("baseurl", "http://auth/bub")
+
+	sources := []source.ByteSource{}
+
+	s := &Site{
+		Source:  &source.InMemorySource{ByteSource: sources},
+		targets: targetList{page: &target.PagePub{UglyURLs: true}},
+	}
+
+	var err error
+	d := time.Second * 2
+	ticker := time.NewTicker(d)
+	select {
+	case err = <-s.ReadPagesFromSource():
+		break
+	case <-ticker.C:
+		err = fmt.Errorf("ReadPagesFromSource() never returns in %s", d.String())
+	}
+	ticker.Stop()
+	if err != nil {
+		t.Fatalf("Unable to read source: %s", err)
+	}
+}
 
 func createAndRenderPages(t *testing.T, s *Site) {
 	if err := s.CreatePages(); err != nil {
@@ -78,14 +106,6 @@ func createAndRenderPages(t *testing.T, s *Site) {
 	}
 }
 
-func templatePrep(s *Site) {
-	s.Tmpl = tpl.New()
-	s.Tmpl.LoadTemplates(s.absLayoutDir())
-	if s.hasTheme() {
-		s.Tmpl.LoadTemplatesWithPrefix(s.absThemeDir()+"/layouts", "theme")
-	}
-}
-
 func pageMust(p *Page, err error) *Page {
 	if err != nil {
 		panic(err)
@@ -97,7 +117,7 @@ func TestDegenerateRenderThingMissingTemplate(t *testing.T) {
 	p, _ := NewPageFrom(strings.NewReader(PAGE_SIMPLE_TITLE), "content/a/file.md")
 	p.Convert()
 	s := new(Site)
-	templatePrep(s)
+	s.prepTemplates()
 	err := s.renderThing(p, "foobar", nil)
 	if err == nil {
 		t.Errorf("Expected err to be returned when missing the template.")
@@ -106,8 +126,7 @@ func TestDegenerateRenderThingMissingTemplate(t *testing.T) {
 
 func TestAddInvalidTemplate(t *testing.T) {
 	s := new(Site)
-	templatePrep(s)
-	err := s.addTemplate("missing", TEMPLATE_MISSING_FUNC)
+	err := s.prepTemplates("missing", TEMPLATE_MISSING_FUNC)
 	if err == nil {
 		t.Fatalf("Expecting the template to return an error")
 	}
@@ -123,18 +142,6 @@ func NopCloser(w io.Writer) io.WriteCloser {
 	return nopCloser{w}
 }
 
-func matchRender(t *testing.T, s *Site, p *Page, tmplName string, expected string) {
-	content := new(bytes.Buffer)
-	err := s.renderThing(p, tmplName, NopCloser(content))
-	if err != nil {
-		t.Fatalf("Unable to render template.")
-	}
-
-	if string(content.Bytes()) != expected {
-		t.Fatalf("Content did not match expected: %s. got: %s", expected, content)
-	}
-}
-
 func TestRenderThing(t *testing.T) {
 	tests := []struct {
 		content  string
@@ -144,13 +151,12 @@ func TestRenderThing(t *testing.T) {
 		{PAGE_SIMPLE_TITLE, TEMPLATE_TITLE, "simple template"},
 		{PAGE_SIMPLE_TITLE, TEMPLATE_FUNC, "simple-template"},
 		{PAGE_WITH_MD, TEMPLATE_CONTENT, "\n\n<h1 id=\"heading-1:91b5c4a22fc6103c73bb91e4a40568f8\">heading 1</h1>\n\n<p>text</p>\n\n<h2 id=\"heading-2:91b5c4a22fc6103c73bb91e4a40568f8\">heading 2</h2>\n\n<p>more text</p>\n"},
-		{SIMPLE_PAGE_RFC3339_DATE, TEMPLATE_DATE, "2013-05-17 16:59:30 &#43;0000 UTC"},
+		{simplePageRFC3339Date, TEMPLATE_DATE, "2013-05-17 16:59:30 &#43;0000 UTC"},
 	}
 
 	for i, test := range tests {
 
 		s := new(Site)
-		templatePrep(s)
 
 		p, err := NewPageFrom(strings.NewReader(test.content), "content/a/file.md")
 		p.Convert()
@@ -158,7 +164,9 @@ func TestRenderThing(t *testing.T) {
 			t.Fatalf("Error parsing buffer: %s", err)
 		}
 		templateName := fmt.Sprintf("foobar%d", i)
-		err = s.addTemplate(templateName, test.template)
+
+		s.prepTemplates(templateName, test.template)
+
 		if err != nil {
 			t.Fatalf("Unable to add template: %s", err)
 		}
@@ -182,15 +190,14 @@ func HTML(in string) string {
 
 func TestRenderThingOrDefault(t *testing.T) {
 	tests := []struct {
-		content  string
 		missing  bool
 		template string
 		expected string
 	}{
-		{PAGE_SIMPLE_TITLE, true, TEMPLATE_TITLE, HTML("simple template")},
-		{PAGE_SIMPLE_TITLE, true, TEMPLATE_FUNC, HTML("simple-template")},
-		{PAGE_SIMPLE_TITLE, false, TEMPLATE_TITLE, HTML("simple template")},
-		{PAGE_SIMPLE_TITLE, false, TEMPLATE_FUNC, HTML("simple-template")},
+		{true, TEMPLATE_TITLE, HTML("simple template")},
+		{true, TEMPLATE_FUNC, HTML("simple-template")},
+		{false, TEMPLATE_TITLE, HTML("simple template")},
+		{false, TEMPLATE_FUNC, HTML("simple-template")},
 	}
 
 	hugofs.DestinationFS = new(afero.MemMapFs)
@@ -198,17 +205,14 @@ func TestRenderThingOrDefault(t *testing.T) {
 	for i, test := range tests {
 
 		s := &Site{}
-		templatePrep(s)
 
 		p, err := NewPageFrom(strings.NewReader(PAGE_SIMPLE_TITLE), "content/a/file.md")
 		if err != nil {
 			t.Fatalf("Error parsing buffer: %s", err)
 		}
 		templateName := fmt.Sprintf("default%d", i)
-		err = s.addTemplate(templateName, test.template)
-		if err != nil {
-			t.Fatalf("Unable to add template: %s", err)
-		}
+
+		s.prepTemplates(templateName, test.template)
 
 		var err2 error
 
@@ -351,13 +355,12 @@ THE END.`, refShortcode))},
 
 	s := &Site{
 		Source:  &source.InMemorySource{ByteSource: sources},
-		Targets: targetList{Page: &target.PagePub{UglyURLs: uglyURLs}},
+		targets: targetList{page: &target.PagePub{UglyURLs: uglyURLs}},
 	}
 
 	s.initializeSiteInfo()
-	templatePrep(s)
 
-	must(s.addTemplate("_default/single.html", "{{.Content}}"))
+	s.prepTemplates("_default/single.html", "{{.Content}}")
 
 	createAndRenderPages(t, s)
 
@@ -387,14 +390,15 @@ THE END.`, refShortcode))},
 }
 
 // Issue #939
-func Test404ShouldAlwaysHaveUglyURLs(t *testing.T) {
+// Issue #1923
+func TestShouldAlwaysHaveUglyURLs(t *testing.T) {
 	hugofs.DestinationFS = new(afero.MemMapFs)
 	for _, uglyURLs := range []bool{true, false} {
-		doTest404ShouldAlwaysHaveUglyURLs(t, uglyURLs)
+		doTestShouldAlwaysHaveUglyURLs(t, uglyURLs)
 	}
 }
 
-func doTest404ShouldAlwaysHaveUglyURLs(t *testing.T, uglyURLs bool) {
+func doTestShouldAlwaysHaveUglyURLs(t *testing.T, uglyURLs bool) {
 	viper.Reset()
 	defer viper.Reset()
 
@@ -404,28 +408,30 @@ func doTest404ShouldAlwaysHaveUglyURLs(t *testing.T, uglyURLs bool) {
 	viper.Set("DisableSitemap", false)
 	viper.Set("DisableRSS", false)
 	viper.Set("RSSUri", "index.xml")
+	viper.Set("blackfriday",
+		map[string]interface{}{
+			"plainIDAnchors": true})
 
 	viper.Set("UglyURLs", uglyURLs)
 
 	sources := []source.ByteSource{
-		{filepath.FromSlash("sect/doc1.html"), []byte("---\nmarkup: markdown\n---\n# title\nsome *content*")},
+		{filepath.FromSlash("sect/doc1.md"), []byte("---\nmarkup: markdown\n---\n# title\nsome *content*")},
+		{filepath.FromSlash("sect/doc2.md"), []byte("---\nurl: /ugly.html\nmarkup: markdown\n---\n# title\ndoc2 *content*")},
 	}
 
 	s := &Site{
 		Source:  &source.InMemorySource{ByteSource: sources},
-		Targets: targetList{Page: &target.PagePub{UglyURLs: uglyURLs}},
+		targets: targetList{page: &target.PagePub{UglyURLs: uglyURLs}},
 	}
 
 	s.initializeSiteInfo()
-	templatePrep(s)
 
-	must(s.addTemplate("index.html", "Home Sweet Home. IsHome={{ .IsHome  }}"))
-	must(s.addTemplate("_default/single.html", "{{.Content}} IsHome={{ .IsHome  }}"))
-	must(s.addTemplate("404.html", "Page Not Found. IsHome={{ .IsHome  }}"))
-
-	// make sure the XML files also end up with ugly urls
-	must(s.addTemplate("rss.xml", "<root>RSS</root>"))
-	must(s.addTemplate("sitemap.xml", "<root>SITEMAP</root>"))
+	s.prepTemplates(
+		"index.html", "Home Sweet {{ if.IsHome  }}Home{{ end }}.",
+		"_default/single.html", "{{.Content}}{{ if.IsHome  }}This is not home!{{ end }}",
+		"404.html", "Page Not Found.{{ if.IsHome  }}This is not home!{{ end }}",
+		"rss.xml", "<root>RSS</root>",
+		"sitemap.xml", "<root>SITEMAP</root>")
 
 	createAndRenderPages(t, s)
 	s.RenderHomePage()
@@ -442,11 +448,13 @@ func doTest404ShouldAlwaysHaveUglyURLs(t *testing.T, uglyURLs bool) {
 		doc      string
 		expected string
 	}{
-		{filepath.FromSlash("index.html"), "Home Sweet Home. IsHome=true"},
-		{filepath.FromSlash(expectedPagePath), "\n\n<h1 id=\"title:5d74edbb89ef198cd37882b687940cda\">title</h1>\n\n<p>some <em>content</em></p>\n IsHome=false"},
-		{filepath.FromSlash("404.html"), "Page Not Found. IsHome=false"},
+		{filepath.FromSlash("index.html"), "Home Sweet Home."},
+		{filepath.FromSlash(expectedPagePath), "\n\n<h1 id=\"title\">title</h1>\n\n<p>some <em>content</em></p>\n"},
+		{filepath.FromSlash("404.html"), "Page Not Found."},
 		{filepath.FromSlash("index.xml"), "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\" ?>\n<root>RSS</root>"},
 		{filepath.FromSlash("sitemap.xml"), "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\" ?>\n<root>SITEMAP</root>"},
+		// Issue #1923
+		{filepath.FromSlash("ugly.html"), "\n\n<h1 id=\"title\">title</h1>\n\n<p>doc2 <em>content</em></p>\n"},
 	}
 
 	for _, p := range s.Pages {
@@ -506,14 +514,13 @@ func doTestSectionNaming(t *testing.T, canonify, uglify, pluralize bool) {
 
 	s := &Site{
 		Source:  &source.InMemorySource{ByteSource: sources},
-		Targets: targetList{Page: &target.PagePub{UglyURLs: uglify}},
+		targets: targetList{page: &target.PagePub{UglyURLs: uglify}},
 	}
 
 	s.initializeSiteInfo()
-	templatePrep(s)
-
-	must(s.addTemplate("_default/single.html", "{{.Content}}"))
-	must(s.addTemplate("_default/list.html", "{{ .Title }}"))
+	s.prepTemplates(
+		"_default/single.html", "{{.Content}}",
+		"_default/list.html", "{{ .Title }}")
 
 	createAndRenderPages(t, s)
 	s.RenderSectionLists()
@@ -571,15 +578,15 @@ func TestSkipRender(t *testing.T) {
 	viper.Set("baseurl", "http://auth/bub")
 	s := &Site{
 		Source:  &source.InMemorySource{ByteSource: sources},
-		Targets: targetList{Page: &target.PagePub{UglyURLs: true}},
+		targets: targetList{page: &target.PagePub{UglyURLs: true}},
 	}
 
 	s.initializeSiteInfo()
-	templatePrep(s)
 
-	must(s.addTemplate("_default/single.html", "{{.Content}}"))
-	must(s.addTemplate("head", "<head><script src=\"script.js\"></script></head>"))
-	must(s.addTemplate("head_abs", "<head><script src=\"/script.js\"></script></head>"))
+	s.prepTemplates(
+		"_default/single.html", "{{.Content}}",
+		"head", "<head><script src=\"script.js\"></script></head>",
+		"head_abs", "<head><script src=\"/script.js\"></script></head>")
 
 	createAndRenderPages(t, s)
 
@@ -627,12 +634,12 @@ func TestAbsURLify(t *testing.T) {
 		viper.Set("BaseURL", "http://auth/bub")
 		s := &Site{
 			Source:  &source.InMemorySource{ByteSource: sources},
-			Targets: targetList{Page: &target.PagePub{UglyURLs: true}},
+			targets: targetList{page: &target.PagePub{UglyURLs: true}},
 		}
 		t.Logf("Rendering with BaseURL %q and CanonifyURLs set %v", viper.GetString("baseURL"), canonify)
 		s.initializeSiteInfo()
-		templatePrep(s)
-		must(s.addTemplate("blue/single.html", TEMPLATE_WITH_URL_ABS))
+
+		s.prepTemplates("blue/single.html", TEMPLATE_WITH_URL_ABS)
 
 		if err := s.CreatePages(); err != nil {
 			t.Fatalf("Unable to create pages: %s", err)

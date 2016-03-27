@@ -99,8 +99,13 @@ Following is a list of Hugo-defined variables that you can configure and their c
     disableRobotsTXT:           false
     # edit new content with this editor, if provided
     editor:                     ""
+    # Enable Emoji emoticons support for page content.
+    # See www.emoji-cheat-sheet.com
+    enableEmoji:				false
     footnoteAnchorPrefix:       ""
     footnoteReturnLinkContents: ""
+    # google analytics tracking id
+    googleAnalytics:            ""
     languageCode:               ""
     layoutdir:                  "layouts"
     # Enable Logging
@@ -140,7 +145,7 @@ Following is a list of Hugo-defined variables that you can configure and their c
     uglyURLs:                   false
     # Do not make the url/path to lowercase
     disablePathToLower:         false
-    # if true, auto-detect Chinese/Janapese/Korean Languages in the content. (.Summary and .WordCount can work properly in CJKLanguage)
+    # if true, auto-detect Chinese/Japanese/Korean Languages in the content. (.Summary and .WordCount can work properly in CJKLanguage)
     hasCJKLanguage              false
     # verbose output
     verbose:                    false

@@ -30,7 +30,7 @@ const ALIAS_DOC_1 = "---\ntitle: alias doc\naliases:\n  - \"alias1/\"\n  - \"ali
 var fakeSource = []source.ByteSource{
 	{
 		Name:    filepath.FromSlash("foo/bar/file.md"),
-		Content: []byte(SIMPLE_PAGE),
+		Content: []byte(simplePage),
 	},
 	{
 		Name:    filepath.FromSlash("alias/test/file1.md"),
@@ -38,17 +38,8 @@ var fakeSource = []source.ByteSource{
 	},
 	{
 		Name:    filepath.FromSlash("section/somecontent.html"),
-		Content: []byte(RENDER_NO_FRONT_MATTER),
+		Content: []byte(renderNoFrontmatter),
 	},
-}
-
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
 }
 
 func checkShowPlanExpected(t *testing.T, s *Site, expected string) {
@@ -97,8 +88,8 @@ func TestFileTarget(t *testing.T) {
 	s := &Site{
 		Source: &source.InMemorySource{ByteSource: fakeSource},
 	}
-	s.AliasTarget()
-	s.PageTarget()
+	s.aliasTarget()
+	s.pageTarget()
 	must(s.CreatePages())
 	expected := "foo/bar/file.md (renderer: markdown)\n canonical => foo/bar/file/index.html\n\n" +
 		"alias/test/file1.md (renderer: markdown)\n" +
@@ -117,10 +108,10 @@ func TestPageTargetUgly(t *testing.T) {
 	viper.Set("UglyURLs", true)
 
 	s := &Site{
-		Targets: targetList{Page: &target.PagePub{UglyURLs: true}},
+		targets: targetList{page: &target.PagePub{UglyURLs: true}},
 		Source:  &source.InMemorySource{ByteSource: fakeSource},
 	}
-	s.AliasTarget()
+	s.aliasTarget()
 
 	s.CreatePages()
 	expected := "foo/bar/file.md (renderer: markdown)\n canonical => foo/bar/file.html\n\n" +
@@ -139,9 +130,9 @@ func TestFileTargetPublishDir(t *testing.T) {
 
 	s := &Site{
 
-		Targets: targetList{
-			Page:  &target.PagePub{PublishDir: "../public"},
-			Alias: &target.HTMLRedirectAlias{PublishDir: "../public"},
+		targets: targetList{
+			page:  &target.PagePub{PublishDir: "../public"},
+			alias: &target.HTMLRedirectAlias{PublishDir: "../public"},
 		},
 		Source: &source.InMemorySource{ByteSource: fakeSource},
 	}

@@ -28,6 +28,17 @@ and other basic tools; these are listed in the
 
 ## General
 
+### default
+Checks whether a given value is set and returns a default value if it is not.
+"Set" in this context means non-zero for numeric types and times;
+non-zero length for strings, arrays, slices, and maps;
+any boolean or struct value; or non-nil for any other types.
+
+e.g.
+
+    {{ index .Params "font" | default "Roboto" }} → default is "Roboto"
+    {{ default "Roboto" (index .Params "font") }} → default is "Roboto"
+
 ### delimit
 Loops through any array, slice or map and returns a string of all the values separated by the delimiter. There is an optional third parameter that lets you choose a different delimiter to go between the last two values.
 Maps will be sorted by the keys, and only a slice of the values will be returned, keeping a consistent output order.
@@ -69,10 +80,22 @@ e.g. Pass into "foo.html" a map with the keys "important, content"
     {{.content}}
     
 
-or Create a map on the fly to pass into 
+or create a map on the fly to pass into 
 
     {{partial "foo" (dict "important" "Smiles" "content" "You should do more")}}
     
+
+
+### slice
+
+`slice` allows you to create an array (`[]interface{}`) of all arguments that you pass to this function.
+
+One use case is the concatenation of elements in combination with `delimit`:
+
+```html
+{{ delimit (slice "foo" "bar" "buzz") ", " }}
+<!-- returns the string "foo, bar, buzz" -->
+```
 
 
 ### echoParam
@@ -99,6 +122,14 @@ e.g.
     {{ range first 10 .Data.Pages }}
         {{ .Render "summary" }}
     {{ end }}
+
+
+### jsonify
+Encodes a given object to JSON.
+
+e.g.
+
+   {{ dict "title" .Title "content" .Plain | jsonify }}
 
 ### last
 Slices an array to only the last _N_ elements.
@@ -382,9 +413,27 @@ These are formatted with the layout string.
 e.g. `{{ dateFormat "Monday, Jan 2, 2006" "2015-01-21" }}` → "Wednesday, Jan 21, 2015"
 
 
+### emojify
+
+Runs the string through the Emoji emoticons processor. The result will be declared as "safe" so Go templates will not filter it.
+
+See the [Emoji cheat sheet](http://www.emoji-cheat-sheet.com/) for available emoticons.
+
+e.g. `{{ "I :heart: Hugo" | emojify }}`
+
 ### highlight
 Takes a string of code and a language, uses Pygments to return the syntax highlighted code in HTML.
 Used in the [highlight shortcode](/extras/highlighting/).
+
+
+### humanize
+Humanize returns the humanized version of a string with the first letter capitalized.
+
+e.g.
+```
+{{humanize "my-first-post"}} → "My first post"
+{{humanize "myCamelPost"}} → "My camel post"
+```
 
 
 ### lower
@@ -399,6 +448,12 @@ Runs the string through the Markdown processor. The result will be declared as "
 
 e.g. `{{ .Title | markdownify }}`
 
+### plainify
+
+Strips any HTML and returns the plain text version.
+
+e.g. `{{ "<b>BatMan</b>" | plainify }}` → "BatMan"
+
 ### pluralize
 Pluralize the given word with a set of common English pluralization rules.
 
@@ -408,6 +463,13 @@ e.g. `{{ "cat" | pluralize }}` → "cats"
 Replaces all occurrences of the search string with the replacement string.
 
 e.g. `{{ replace "Batman and Robin" "Robin" "Catwoman" }}` → "Batman and Catwoman"
+
+
+### replaceRE
+Replaces all occurrences of a regular expression with the replacement pattern.
+
+e.g. `{{ replaceRE "^https?://([^/]+).*" "$1" "http://gohugo.io/docs" }}` → "gohugo.io"
+e.g. `{{ "http://gohugo.io/docs" | replaceRE "^https?://([^/]+).*" "$1" }}` → "gohugo.io"
 
 
 ### safeHTML
@@ -565,6 +627,33 @@ CJK-like languages.
 ```
 
 
+### md5
+
+`md5` hashes the given input and returns its MD5 checksum.
+
+```html
+{{ md5 "Hello world, gophers!" }}
+<!-- returns the string "b3029f756f98f79e7f1b7f1d1f0dd53b" -->
+```
+
+This can be useful if you want to use Gravatar for generating a unique avatar:
+
+```html
+<img src="https://www.gravatar.com/avatar/{{ md5 "your@email.com" }}?s=100&d=identicon">
+```
+
+
+### sha1
+
+`sha1` hashes the given input and returns its SHA1 checksum.
+
+```html
+{{ sha1 "Hello world, gophers!" }}
+<!-- returns the string "c8b5b0e33d408246e30f53e32b8f7627a7a649d4" -->
+```
+
+
+
 ## URLs
 
 ### absURL, relURL
@@ -705,7 +794,7 @@ This works, but the complexity of "post/tag/list.html" is fairly high; the Hugo 
 This is Hugo. We have a better way. If this were your "post/tag/list.html" instead, all of those problems are fixed automatically (this first version separates all of the operations for ease of reading; the combined version will be shown after the explanation).
 
     <!-- post/tag/list.html -->
-    {{ with.Params.tags }}
+    {{ with .Params.tags }}
     <div class="tags-list">
       Tags:
       {{ $sort := sort . }}
@@ -718,7 +807,7 @@ This is Hugo. We have a better way. If this were your "post/tag/list.html" inste
 In this version, we are now sorting the tags, converting them to links with "post/tag/link.html", cleaning off stray newlines, and joining them together in a delimited list for presentation. That can also be written as:
 
     <!-- post/tag/list.html -->
-    {{ with.Params.tags }}
+    {{ with .Params.tags }}
     <div class="tags-list">
       Tags:
       {{ delimit (apply (apply (sort .) "partial" "post/tag/link" ".") "chomp" ".") ", " }}
