@@ -11,36 +11,186 @@ title: Release Notes
 weight: 10
 ---
 
-## **0.16.0** TBD
+## **0.18.0** ???
+
+In Hugo 0.18 every piece of content is a `Page`  ({{<gh 2297 >}}) and this means that every page, including the home page, can have a content file with frontmatter.
+
+Not only is this a much simpler model to understand, it is also faster and it fixes several important issues:
+
+* Enable proper titles for Nodes {{<gh 1051>}}
+* Sitemap.xml should include nodes, as well as pages {{<gh 1303>}}
+* Document homepage content workaround {{<gh 2240>}}
+* Allow home page to be easily authored in markdown {{<gh 720>}}
+* Minimalist website with homepage as content {{<gh 330>}}
+
+
+
+
+
+
+
+## **0.17.0** October 7th 2016
+
+Hugo is going global with our 0.17 release.  We put a lot of thought into how we could extend Hugo
+to support multilingual websites with the most simple and elegant experience. Hugo's multilingual
+capabilities rival the best web and documentation software, but Hugo's experience is unmatched.
+If you have a single language website, the simple Hugo experience you already love is unchanged.
+Adding additional languages to your website is simple and straightforward. Hugo has been completely
+internally rewritten to be multilingual aware with translation and internationalization features
+embedded throughout Hugo.
+
+Hugo continues its trend of each release being faster than the last. It's quite a challenge to consistently add
+significant new functionality and simultaneously dramatically improve performance. {{<gh "@bep">}} has made it
+his personal mission to apply the Go mantra of "Enable more. Do less" to Hugo. Hugo's consistent improvement
+is a testament to his brilliance and his dedication to his craft. Hugo additionally benefits from the
+performance improvements from the Go team in the Go 1.7 release.
+
+This release represents **over 300 contributions by over 70 contributors** to
+the main Hugo code base. Since last release Hugo has **gained 2000 stars, 50 new
+contributors and 20 additional themes.**
 
 Hugo now has:
 
-* 8700 (+2000) stars on GitHub
-* 284 (+50) contributors
-* 77 (+10) themes
+* 12,000 stars on GitHub
+* 370+ contributors
+* 110+ themes
+
+{{<gh "@bep" >}} continues to lead the project with the lionshare of contributions
+and reviews. A special thanks to {{<gh "@bep" >}} and {{<gh "@abourget" >}} for their
+considerable work on multilingual support.
+
+A big welcome to newcomers {{<gh "@MarkDBlackwell" >}}, {{<gh "@bogem" >}} and
+{{<gh "@g3wanghc" >}} for their critical contributions.
+
+### Highlights
+
+**Multilingual Support:**
+Hugo now supports multiple languages side-by-side. A single site can now have multiple languages rendered with
+full support for translation and i18n.
+
+**Performance:**
+Hugo is faster than ever! Hugo 0.17 is not only our fastest release, it's also the most efficient.
+Hugo 0.17 is **nearly twice as fast as Hugo 0.16** and uses about 10% less memory.
+This means that the same site will build in nearly half the time it took with Hugo 0.16.
+For the first time Hugo sites are averaging well under 1ms per rendered content.
+
+**Docs overhaul:**
+This release really focused on improving the documentation. [Gohugo.io](http://gohugo.io) is
+more accurate and complete than ever.
+
+**Support for macOS Sierra**
 
 ### New Features
+* Multilingual support {{<gh 2303>}}
+* Allow content expiration {{<gh 2137 >}}
+* New templates functions:
+  * `querify` function to generate query strings inside templates {{<gh 2257>}}
+  * `htmlEscape` and `htmlUnescape` template functions {{<gh 2287>}}
+  * `time` converts a timestamp string into a time.Time structure {{<gh 2329>}}
 
+### Enhancements
+
+* Render the shortcodes as late as possible {{<gh 0xed0985404db4630d1b9d3ad0b7e41fb186ae0112>}}
+* Remove unneeded casts in page.getParam {{<gh 2186 >}}
+* Automatic page date fallback {{<gh 2239>}}
+* Enable safeHTMLAttr {{<gh 2234>}}
+* Add TODO list support for markdown {{<gh 2296>}}
+* Make absURL and relURL accept any type {{<gh 2352>}}
+* Suppress 'missing static' error {{<gh 2344>}}
+* Make summary, wordcount etc. more efficient {{<gh 2378>}}
+* Better error reporting in `hugo convert` {{<gh 2440>}}
+* Reproducible builds thanks to govendor {{<gh 2461>}}
+
+### Fixes
+
+* Fix shortcode in markdown headers {{<gh 2210 >}}
+* Explicitly bind livereload to hugo server port {{<gh 2205>}}
+* Fix Emojify for certain text patterns {{<gh 2198>}}
+* Normalize file name to NFC {{<gh 2259>}}
+* Ignore emacs temp files {{<gh 2266>}}
+* Handle symlink change event {{<gh 2273>}}
+* Fix panic when using URLize {{<gh 2274>}}
+* `hugo import jekyll`: Fixed target path location check {{<gh 2293>}}
+* Return all errors from casting in templates {{<gh 2356>}}
+* Fix paginator counter on x86-32 {{<gh 2420>}}
+* Fix half-broken self-closing shortcodes {{<gh 2499>}}
+
+****
+
+## **0.16.0** June 6th 2016
+
+Hugo 0.16 is our best and biggest release ever. The Hugo community has
+outdone itself with continued performance improvements,
+[beautiful themes](http://themes.gohugo.io) for all types of sites from project
+sites to documentation to blogs to portfolios, and increased stability.
+
+This release represents **over 550 contributions by over 110 contributors** to
+the main Hugo code base. Since last release Hugo has **gained 3500 stars, 90
+contributors and 23 additional themes.**
+
+This release celebrates 3 years since  {{< gh "@spf13" >}} wrote the first lines
+of Hugo. During those 3 years Hugo has accomplished some major milestones
+including...
+
+* 10,000+ stars on GitHub
+* 320+ contributors
+* 90+ themes
+* 1000s of happy websites
+* Many subprojects like {{< gh "@spf13/cobra">}}, {{< gh "@spf13/viper">}} and
+  {{< gh "@spf13/afero">}} which have experienced broad usage across the Go
+  ecosystem.
+
+{{< gh "@bep" >}} led the development of Hugo for the 3rd consecutive release
+with nearly half of the contributions to 0.16 in addition to his considerable
+contributions as lead maintainer. {{< gh "@anthonyfok" >}}, {{< gh
+"@DigitalCraftsman" >}}, {{< gh "@MooreReason" >}} all made significant
+contributions. A special thanks to {{< gh "@abourget " >}} for his considerable
+work on multilingual support. Due to its broad impact we wanted to spend more
+time testing it and it will be included in Hugo's next release.
+
+### Highlights
+
+**Partial Builds:** Prior to this release Hugo would always reread and rebuild
+the entire site. This release introduces support for reactive site building
+while watching (`hugo server`). Hugo will watch the filesystem for changes and
+only re-read the changed files. Depending on the files change Hugo will
+intelligently re-render only the needed portion of the site. Performance gains
+depend on the operation performed and size of the site. In our testing build
+times decreased anywhere from 10% to 99%.
+
+**Template Improvements:** Template improvements continue to be a mainstay of each Hugo release. Hugo 0.16 adds support for the new `block` keyword introduced in Go 1.6 -- think base templates with default sections -- as well as many new template functions.
+
+**Polish:** As Hugo matures releases will inevitably contain fewer huge new features. This release represents hundreds of small improvements across ever facet of Hugo which will make for a much better experience for all of our users. Worth mentioning here is the curious bug where live reloading didn't work in some editors on OS X, including the popular TextMate 2. This is now fixed. Oh, and now any error will exit with an error code, a big thing for automated deployments.
+
+### New Features
+* Support reading configuration variables from the OS environment {{<gh 2090 >}}
 * Add emoji support {{<gh 1892>}}
 * Add `themesDir` option to configuration {{<gh 1556>}}
 * Add support for Go 1.6 `block` keyword in templates {{<gh 1832>}}
 * Partial static sync {{<gh 1644>}}
 * Source file based relative linking (a la Github) {{<gh 0x0f6b334b6715253b030c4e783b88e911b6e53e56>}}
-* Templates functions:
-    * Add `countwords` and `countrunes` template funcs {{<gh 1440>}}
-    * Add `default` template function {{<gh 1943>}}
-    * Add `hasPrefix` template function {{<gh 1243>}}
-    * Add `humanize` template function {{<gh 1450>}}
-    * Add `jsonify` template function {{<gh 0x435e996c4fd48e9009ffa9f83a19fb55f0777dbd>}}
-    * Add `md5` and `sha1` template functions {{<gh 1932>}}
-    * Add `replaceRE` template function {{<gh 1845>}}
-    * Add `shuffle` template function {{<gh 1942>}}
-    * Add `slice` template function {{<gh 1902>}}
+*  Add `ByLastmod` sort function to pages. {{<gh 0xeb627ca16de6fb5e8646279edd295a8bf0f72bf1 >}}
+* New templates functions:
+	* `readFile` {{<gh 1551 >}}
+    * `countwords` and `countrunes` {{<gh 1440>}}
+    * `default` {{<gh 1943>}}
+    * `hasPrefix` {{<gh 1243>}}
+    * `humanize` {{<gh 1818>}}
+    * `jsonify` {{<gh 0x435e996c4fd48e9009ffa9f83a19fb55f0777dbd>}}
+    * `md5` and `sha1` {{<gh 1932>}}
+    * `replaceRE` {{<gh 1845>}}
+    * `findRE` {{<gh 2048>}}
+    * `shuffle` {{<gh 1942>}}
+    * `slice` {{<gh 1902>}}
+    * `plainify` {{<gh 1915>}}
 
 ### Enhancements
 
+* Hugo now exits with error code on any error. This is a big thing for
+  automated deployments. {{<gh 740 >}}
 * Print error when `/index.html` is zero-length {{<gh 947>}}
-* Enable dirname and filename bash autocompletion for more flags {{<gh 0x666ddd237791b56fd048992dca9a27d1af50a10e>}}
+* Enable dirname and filename bash autocompletion for more flags {{<gh
+  0x666ddd237791b56fd048992dca9a27d1af50a10e>}}
 * Improve error handling in commands {{<gh 1502>}}
 * Add sanity checks for `hugo import jekyll` {{<gh 1625 >}}
 * Add description to `Page.Params` {{<gh 1484>}}
@@ -48,13 +198,35 @@ Hugo now has:
 * Add autostart option to YouTube shortcode {{<gh 1784>}}
 * Set Date and Lastmod for main home page {{<gh 1903>}}
 * Allow URL with extension in frontmatter {{<gh 1923>}}
-* Add list support in Scratch {{<gh 0xeaba04e82bdfc5d4c29e970f11b4aab9cc0efeaa>}}
+* Add list support in Scratch {{<gh
+  0xeaba04e82bdfc5d4c29e970f11b4aab9cc0efeaa>}}
 * Add file option to gist shortcode {{<gh 1955>}}
 * Add config layout and content directory CLI options {{<gh 1698>}}
-* Add boolean value comparison to `where` template function {{<gh 0xf3c74c9db484c8961e70cb3458f9e41e7832fa12>}}
+* Add boolean value comparison to `where` template function {{<gh
+  0xf3c74c9db484c8961e70cb3458f9e41e7832fa12>}}
+* Do not write to to cache when `ignoreCache` is set  {{<gh 2067>}}
+* Add option to disable rendering of 404 page  {{<gh 2037>}}
+* Mercurial is no longer needed to build Hugo {{<gh 2062 >}}
+* Do not create `robots.txt` by default {{<gh 2049>}}
+* Disable syntax guessing for PygmentsCodeFences by default.  To enable syntax
+  guessing again, add the following to your config file:
+  `PygmentsCodeFencesGuessSyntax = true` {{<gh 2034>}}
+* Make `ByCount` sort consistently {{<gh 1930>}}
+* Add `Scratch` to shortcode {{<gh 2000>}}
+* Add support for symbolic links for content, layout, static, theme  {{<gh 1855
+  >}}
+* Add '+' as one of the valid characters in URLs specified in the front matter
+  {{<gh 1290 >}}
+* Make alias redirect output URLs relative when `RelativeURLs = true` {{<gh
+  2093 >}}
+* Hugo injects meta generator tag on homepage if missing {{<gh
+  2182 >}}
 
 ### Fixes
-
+* Fix file change watcher for TextMate 2 and friends on OS X {{<gh 1053 >}}
+* Make dynamic reloading of config file reliable on all platform {{<gh 1684 >}}
+* Hugo now works on Linux/arm64 {{<gh 1772 >}}
+* `plainIDAnchors` now defaults to `true`  {{<gh 2057>}}
 * Win32 and ARM builds fixed {{<gh 1716>}}
 * Copy static dir files without theme's static dir {{<gh 1656>}}
 * Make `noTimes` command flag work {{<gh 1657>}}
@@ -64,13 +236,14 @@ Hugo now has:
 * Use absolute path when editing with editor {{<gh 1589>}}
 * Fix hugo server "Watching for changes" path display {{<gh 1721>}}
 * Do not strip special characters out of URLs {{<gh 1292>}}
-* Fix `RSSLink` when uglyurls are enabled {{<gh 175>}}
-* Do not call `watchConfig` when not in watch mode {{<gh 1772>}}
+* Fix `RSSLink` when uglyURLs are enabled {{<gh 175>}}
 * Get BaseURL from viper in server mode {{<gh 1821>}}
 * Fix shortcode handling in RST {{<gh 1904>}}
 * Use default sitemap configuration for homepage {{<gh 1304>}}
 * Exit if specific port is unavailable in server mode {{<gh 1901>}}
+* Fix regression in "section menus for lazy blogger" {{<gh 2065>}}
 
+****
 
 ## **0.15.0**  November 25, 2015
 
@@ -256,7 +429,7 @@ Hugo also depends on a lot of other great projects. A big thanks to all of our d
 * More Pygments highlighting options, including `line numbers`
 * Show help information to Windows users who try to double click on `hugo.exe`.
 * Add `bind` flag to `hugo server` to set the interface to which the server will bind
-* Add support for `canonifyurls` in `srcset`
+* Add support for `canonifyURLs` in `srcset`
 * Add shortcode support for HTML (content) files
 * Allow the same `shortcode` to  be used with or without inline content
 * Configurable RSS output filename
@@ -265,7 +438,7 @@ Hugo also depends on a lot of other great projects. A big thanks to all of our d
 * Fix panic with paginator and zero pages in result set.
 * Fix crossrefs on Windows.
 * Fix `eq` and `ne` template functions when used with a raw number combined with the result of `add`, `sub` etc.
-* Fix paginator with uglyurls
+* Fix paginator with uglyURLs
 * Fix {{< gh 998 >}}, supporting UTF8 characters in Permalinks.
 
 ## Notices

@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2016 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,16 @@
 package hugolib
 
 import (
-	"bytes"
 	"testing"
 
-	"github.com/spf13/afero"
+	"reflect"
+
 	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/hugofs"
 	"github.com/spf13/hugo/source"
 	"github.com/spf13/viper"
-	"reflect"
 )
 
-const SITEMAP_TEMPLATE = `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+const sitemapTemplate = `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   {{ range .Data.Pages }}
   <url>
     <loc>{{ .Permalink }}</loc>
@@ -37,51 +35,45 @@ const SITEMAP_TEMPLATE = `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap
 </urlset>`
 
 func TestSitemapOutput(t *testing.T) {
-	viper.Reset()
-	defer viper.Reset()
+	for _, internal := range []bool{false, true} {
+		doTestSitemapOutput(t, internal)
+	}
+}
 
-	hugofs.DestinationFS = new(afero.MemMapFs)
+func doTestSitemapOutput(t *testing.T, internal bool) {
+	testCommonResetState()
 
-	viper.Set("baseurl", "http://auth/bub/")
+	viper.Set("baseURL", "http://auth/bub/")
 
 	s := &Site{
-		Source: &source.InMemorySource{ByteSource: WEIGHTED_SOURCES},
+		Source:   &source.InMemorySource{ByteSource: weightedSources},
+		Language: helpers.NewDefaultLanguage(),
 	}
 
-	s.initializeSiteInfo()
+	if internal {
+		if err := buildAndRenderSite(s); err != nil {
+			t.Fatalf("Failed to build site: %s", err)
+		}
 
-	s.prepTemplates("sitemap.xml", SITEMAP_TEMPLATE)
-
-	if err := s.CreatePages(); err != nil {
-		t.Fatalf("Unable to create pages: %s", err)
+	} else {
+		if err := buildAndRenderSite(s, "sitemap.xml", sitemapTemplate); err != nil {
+			t.Fatalf("Failed to build site: %s", err)
+		}
 	}
 
-	if err := s.BuildSiteMeta(); err != nil {
-		t.Fatalf("Unable to build site metadata: %s", err)
-	}
+	assertFileContent(t, "public/sitemap.xml", true,
+		// Regular page
+		" <loc>http://auth/bub/sect/doc1/</loc>",
+		// Home page
+		"<loc>http://auth/bub/</loc>",
+		// Section
+		"<loc>http://auth/bub/sect/</loc>",
+		// Tax terms
+		"<loc>http://auth/bub/categories/</loc>",
+		// Tax list
+		"<loc>http://auth/bub/categories/hugo/</loc>",
+	)
 
-	if err := s.RenderHomePage(); err != nil {
-		t.Fatalf("Unable to RenderHomePage: %s", err)
-	}
-
-	if err := s.RenderSitemap(); err != nil {
-		t.Fatalf("Unable to RenderSitemap: %s", err)
-	}
-
-	if err := s.RenderRobotsTXT(); err != nil {
-		t.Fatalf("Unable to RenderRobotsTXT :%s", err)
-	}
-
-	sitemapFile, err := hugofs.DestinationFS.Open("sitemap.xml")
-
-	if err != nil {
-		t.Fatalf("Unable to locate: sitemap.xml")
-	}
-
-	sitemap := helpers.ReaderToBytes(sitemapFile)
-	if !bytes.HasPrefix(sitemap, []byte("<?xml")) {
-		t.Errorf("Sitemap file should start with <?xml. %s", sitemap)
-	}
 }
 
 func TestParseSitemap(t *testing.T) {

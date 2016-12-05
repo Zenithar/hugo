@@ -23,6 +23,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/spf13/hugo/hugofs"
+
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
 	"golang.org/x/text/transform"
@@ -73,16 +75,16 @@ var fpb filepathBridge
 // It does so by creating a Unicode-sanitized string, with the spaces replaced,
 // whilst preserving the original casing of the string.
 // E.g. Social Media -> Social-Media
-func MakePath(s string) string {
-	return UnicodeSanitize(strings.Replace(strings.TrimSpace(s), " ", "-", -1))
+func (p *PathSpec) MakePath(s string) string {
+	return p.UnicodeSanitize(strings.Replace(strings.TrimSpace(s), " ", "-", -1))
 }
 
 // MakePathSanitized creates a Unicode-sanitized string, with the spaces replaced
-func MakePathSanitized(s string) string {
-	if viper.GetBool("DisablePathToLower") {
-		return MakePath(s)
+func (p *PathSpec) MakePathSanitized(s string) string {
+	if p.disablePathToLower {
+		return p.MakePath(s)
 	}
-	return strings.ToLower(MakePath(s))
+	return strings.ToLower(p.MakePath(s))
 }
 
 // MakeTitle converts the path given to a suitable title, trimming whitespace
@@ -91,23 +93,38 @@ func MakeTitle(inpath string) string {
 	return strings.Replace(strings.TrimSpace(inpath), "-", " ", -1)
 }
 
+// From https://golang.org/src/net/url/url.go
+func ishex(c rune) bool {
+	switch {
+	case '0' <= c && c <= '9':
+		return true
+	case 'a' <= c && c <= 'f':
+		return true
+	case 'A' <= c && c <= 'F':
+		return true
+	}
+	return false
+}
+
 // UnicodeSanitize sanitizes string to be used in Hugo URL's, allowing only
 // a predefined set of special Unicode characters.
 // If RemovePathAccents configuration flag is enabled, Uniccode accents
 // are also removed.
-func UnicodeSanitize(s string) string {
+func (p *PathSpec) UnicodeSanitize(s string) string {
 	source := []rune(s)
 	target := make([]rune, 0, len(source))
 
-	for _, r := range source {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '%' || r == '.' || r == '/' || r == '\\' || r == '_' || r == '-' || r == '#' || r == '+' {
+	for i, r := range source {
+		if r == '%' && i+2 < len(source) && ishex(source[i+1]) && ishex(source[i+2]) {
+			target = append(target, r)
+		} else if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '.' || r == '/' || r == '\\' || r == '_' || r == '-' || r == '#' || r == '+' {
 			target = append(target, r)
 		}
 	}
 
 	var result string
 
-	if viper.GetBool("RemovePathAccents") {
+	if p.removePathAccents {
 		// remove accents - see https://blog.golang.org/normalization
 		t := transform.Chain(norm.NFD, transform.RemoveFunc(isMn), norm.NFC)
 		result, _, _ = transform.String(t, string(target))
@@ -137,13 +154,13 @@ func AbsPathify(inPath string) string {
 	}
 
 	// TODO(bep): Consider moving workingDir to argument list
-	return filepath.Clean(filepath.Join(viper.GetString("WorkingDir"), inPath))
+	return filepath.Clean(filepath.Join(viper.GetString("workingDir"), inPath))
 }
 
 // GetStaticDirPath returns the absolute path to the static file dir
 // for the current Hugo project.
 func GetStaticDirPath() string {
-	return AbsPathify(viper.GetString("StaticDir"))
+	return AbsPathify(viper.GetString("staticDir"))
 }
 
 // GetThemeDir gets the root directory of the current theme, if there is one.
@@ -167,14 +184,22 @@ func GetThemeDataDirPath() (string, error) {
 	return getThemeDirPath("data")
 }
 
+// GetThemeI18nDirPath returns the theme's i18n dir path if theme is set.
+// If theme is set and the i18n dir doesn't exist, an error is returned.
+func GetThemeI18nDirPath() (string, error) {
+	return getThemeDirPath("i18n")
+}
+
 func getThemeDirPath(path string) (string, error) {
-	var themeDir string
-	if ThemeSet() {
-		themeDir = filepath.Join(GetThemeDir(), path)
-		if _, err := os.Stat(themeDir); os.IsNotExist(err) {
-			return "", fmt.Errorf("Unable to find %s directory for theme %s in %s", path, viper.GetString("theme"), themeDir)
-		}
+	if !ThemeSet() {
+		return "", errors.New("No theme set")
 	}
+
+	themeDir := filepath.Join(GetThemeDir(), path)
+	if _, err := hugofs.Source().Stat(themeDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("Unable to find %s directory for theme %s in %s", path, viper.GetString("theme"), themeDir)
+	}
+
 	return themeDir, nil
 }
 
@@ -207,7 +232,7 @@ func makePathRelative(inPath string, possibleDirectories ...string) (string, err
 }
 
 // Should be good enough for Hugo.
-var isFileRe = regexp.MustCompile(".*\\..{1,6}$")
+var isFileRe = regexp.MustCompile(`.*\..{1,6}$`)
 
 // GetDottedRelativePath expects a relative path starting after the content directory.
 // It returns a relative path with dots ("..") navigating up the path structure.
@@ -316,8 +341,8 @@ func GetRelativePath(path, base string) (final string, err error) {
 
 // PaginateAliasPath creates a path used to access the aliases in the paginator.
 func PaginateAliasPath(base string, page int) string {
-	paginatePath := viper.GetString("paginatePath")
-	uglify := viper.GetBool("UglyURLs")
+	paginatePath := Config().GetString("paginatePath")
+	uglify := viper.GetBool("uglyURLs")
 	var p string
 	if base != "" {
 		p = filepath.FromSlash(fmt.Sprintf("/%s/%s/%d", base, paginatePath, page))
@@ -445,23 +470,30 @@ func FindCWD() (string, error) {
 	return path, nil
 }
 
+var ErrWalkRootTooShort = errors.New("Path too short. Stop walking.")
+
 // SymbolicWalk is like filepath.Walk, but it supports the root being a
 // symbolic link. It will still not follow symbolic links deeper down in
 // the file structure
 func SymbolicWalk(fs afero.Fs, root string, walker filepath.WalkFunc) error {
 
+	// Sanity check
+	if len(root) < 4 {
+		return ErrWalkRootTooShort
+	}
+
 	// Handle the root first
-	fileInfo, err := lstatIfOs(fs, root)
+	fileInfo, realPath, err := getRealFileInfo(fs, root)
 
 	if err != nil {
 		return walker(root, nil, err)
 	}
 
 	if !fileInfo.IsDir() {
-		return nil
+		return fmt.Errorf("Cannot walk regular file %s", root)
 	}
 
-	if err := walker(root, fileInfo, err); err != nil && err != filepath.SkipDir {
+	if err := walker(realPath, fileInfo, err); err != nil && err != filepath.SkipDir {
 		return err
 	}
 
@@ -472,11 +504,47 @@ func SymbolicWalk(fs afero.Fs, root string, walker filepath.WalkFunc) error {
 	}
 
 	for _, fi := range rootContent {
-		afero.Walk(fs, filepath.Join(root, fi.Name()), walker)
+		if err := afero.Walk(fs, filepath.Join(root, fi.Name()), walker); err != nil {
+			return err
+		}
 	}
 
 	return nil
 
+}
+
+func getRealFileInfo(fs afero.Fs, path string) (os.FileInfo, string, error) {
+	fileInfo, err := lstatIfOs(fs, path)
+	realPath := path
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	if fileInfo.Mode()&os.ModeSymlink == os.ModeSymlink {
+		link, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("Cannot read symbolic link '%s', error was: %s", path, err)
+		}
+		fileInfo, err = lstatIfOs(fs, link)
+		if err != nil {
+			return nil, "", fmt.Errorf("Cannot stat '%s', error was: %s", link, err)
+		}
+		realPath = link
+	}
+	return fileInfo, realPath, nil
+}
+
+// GetRealPath returns the real file path for the given path, whether it is a
+// symlink or not.
+func GetRealPath(fs afero.Fs, path string) (string, error) {
+	_, realPath, err := getRealFileInfo(fs, path)
+
+	if err != nil {
+		return "", err
+	}
+
+	return realPath, nil
 }
 
 // Code copied from Afero's path.go

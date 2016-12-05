@@ -19,14 +19,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"os"
+
+	"github.com/spf13/afero"
 )
 
 // LazyFileReader is an io.Reader implementation to postpone reading the file
 // contents until it is really needed. It keeps filename and file contents once
 // it is read.
 type LazyFileReader struct {
+	fs       afero.Fs
 	filename string
 	contents *bytes.Reader
 	pos      int64
@@ -35,13 +36,13 @@ type LazyFileReader struct {
 // NewLazyFileReader creates and initializes a new LazyFileReader of filename.
 // It checks whether the file can be opened. If it fails, it returns nil and an
 // error.
-func NewLazyFileReader(filename string) (*LazyFileReader, error) {
-	f, err := os.Open(filename)
+func NewLazyFileReader(fs afero.Fs, filename string) (*LazyFileReader, error) {
+	f, err := fs.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return &LazyFileReader{filename: filename, contents: nil, pos: 0}, nil
+	return &LazyFileReader{fs: fs, filename: filename, contents: nil, pos: 0}, nil
 }
 
 // Filename returns a file name which LazyFileReader keeps
@@ -55,14 +56,13 @@ func (l *LazyFileReader) Filename() string {
 // the file.
 func (l *LazyFileReader) Read(p []byte) (n int, err error) {
 	if l.contents == nil {
-		b, err := ioutil.ReadFile(l.filename)
+		b, err := afero.ReadFile(l.fs, l.filename)
 		if err != nil {
 			return 0, fmt.Errorf("failed to read content from %s: %s", l.filename, err.Error())
 		}
 		l.contents = bytes.NewReader(b)
 	}
-	l.contents.Seek(l.pos, 0)
-	if err != nil {
+	if _, err = l.contents.Seek(l.pos, 0); err != nil {
 		return 0, errors.New("failed to set read position: " + err.Error())
 	}
 	n, err = l.contents.Read(p)
@@ -80,7 +80,7 @@ func (l *LazyFileReader) Seek(offset int64, whence int) (pos int64, err error) {
 		case 1:
 			pos = l.pos + offset
 		case 2:
-			fi, err := os.Stat(l.filename)
+			fi, err := l.fs.Stat(l.filename)
 			if err != nil {
 				return 0, fmt.Errorf("failed to get %q info: %s", l.filename, err.Error())
 			}
@@ -115,7 +115,7 @@ func (l *LazyFileReader) WriteTo(w io.Writer) (n int64, err error) {
 		l.pos += n
 		return n, err
 	}
-	f, err := os.Open(l.filename)
+	f, err := l.fs.Open(l.filename)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open %s to read content: %s", l.filename, err.Error())
 	}

@@ -15,11 +15,12 @@ package commands
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/hugo/hugofs"
 	"github.com/spf13/hugo/parser"
 )
 
@@ -46,7 +47,7 @@ func Undraft(cmd *cobra.Command, args []string) error {
 
 	location := args[0]
 	// open the file
-	f, err := os.Open(location)
+	f, err := hugofs.Source().Open(location)
 	if err != nil {
 		return err
 	}
@@ -63,7 +64,7 @@ func Undraft(cmd *cobra.Command, args []string) error {
 		return newSystemErrorF("an error occurred while undrafting %q: %s", location, err)
 	}
 
-	f, err = os.OpenFile(location, os.O_WRONLY|os.O_TRUNC, 0644)
+	f, err = hugofs.Source().OpenFile(location, os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return newSystemErrorF("%q not be undrafted due to error opening file to save changes: %q\n", location, err)
 	}
@@ -89,8 +90,7 @@ func undraftContent(p parser.Page) (bytes.Buffer, error) {
 	// Front Matter
 	fm := p.FrontMatter()
 	if fm == nil {
-		err := fmt.Errorf("Front Matter was found, nothing was finalized")
-		return buff, err
+		return buff, errors.New("Front Matter was found, nothing was finalized")
 	}
 
 	var isDraft, gotDate bool
@@ -100,7 +100,7 @@ L:
 		switch k {
 		case "draft":
 			if !v.(bool) {
-				return buff, fmt.Errorf("not a Draft: nothing was done")
+				return buff, errors.New("not a Draft: nothing was done")
 			}
 			isDraft = true
 			if gotDate {
@@ -117,7 +117,7 @@ L:
 
 	// if draft wasn't found in FrontMatter, it isn't a draft.
 	if !isDraft {
-		return buff, fmt.Errorf("not a Draft: nothing was done")
+		return buff, errors.New("not a Draft: nothing was done")
 	}
 
 	// get the front matter as bytes and split it into lines
@@ -126,7 +126,7 @@ L:
 	if len(fmLines) == 1 { // if the result is only 1 element, try to split on dos line endings
 		fmLines = bytes.Split(fm, []byte("\r\n"))
 		if len(fmLines) == 1 {
-			return buff, fmt.Errorf("unable to split FrontMatter into lines")
+			return buff, errors.New("unable to split FrontMatter into lines")
 		}
 		lineEnding = append(lineEnding, []byte("\r\n")...)
 	} else {
@@ -150,7 +150,7 @@ L:
 	}
 
 	// append the actual content
-	buff.Write([]byte(p.Content()))
+	buff.Write(p.Content())
 
 	return buff, nil
 }

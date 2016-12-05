@@ -67,7 +67,7 @@ Creates a dictionary `(map[string, interface{})`, expects parameters added in va
 Invalid combinations like keys that are not strings or uneven number of parameters, will result in an exception thrown.
 Useful for passing maps to partials when adding to a template.
 
-e.g. Pass into "foo.html" a map with the keys "important, content" 
+e.g. Pass into "foo.html" a map with the keys "important, content"
 
     {{$important := .Site.Params.SomethingImportant }}
     {{range .Site.Params.Bar}}
@@ -78,12 +78,11 @@ e.g. Pass into "foo.html" a map with the keys "important, content"
 
     Important {{.important}}
     {{.content}}
-    
 
-or create a map on the fly to pass into 
+or create a map on the fly to pass into
 
     {{partial "foo" (dict "important" "Smiles" "content" "You should do more")}}
-    
+
 
 
 ### slice
@@ -97,6 +96,18 @@ One use case is the concatenation of elements in combination with `delimit`:
 <!-- returns the string "foo, bar, buzz" -->
 ```
 
+
+### shuffle
+
+`shuffle` returns a random permutation of a given array or slice, e.g.
+
+```html
+{{ shuffle (seq 1 5) }}
+<!-- returns [2 5 3 1 4] -->
+
+{{ shuffle (slice "foo" "bar" "buzz") }}
+<!-- returns [buzz foo bar] -->
+```
 
 ### echoParam
 Prints a parameter if it is set.
@@ -129,7 +140,7 @@ Encodes a given object to JSON.
 
 e.g.
 
-   {{ dict "title" .Title "content" .Plain | jsonify }}
+    {{ dict "title" .Title "content" .Plain | jsonify }}
 
 ### last
 Slices an array to only the last _N_ elements.
@@ -313,6 +324,15 @@ Following operators are now available
 - `<`, `lt`: True if a given field value is lesser than a matching value
 - `in`: True if a given field value is included in a matching value. A matching value must be an array or a slice
 - `not in`: True if a given field value isn't included in a matching value. A matching value must be an array or a slice
+- `intersect`: True if a given field value that is a slice / array of strings or integers contains elements in common with the matching value. It follows the same rules as the intersect function.
+
+*`intersect` operator, e.g.:*
+
+    {{ range where .Site.Pages ".Params.tags" "intersect" .Params.tags }}
+      {{ if ne .Permalink $.Permalink }}
+        {{ .Render "summary" }}
+      {{ end }}
+    {{ end }}
 
 *`where` and `first` can be stacked, e.g.:*
 
@@ -336,6 +356,31 @@ e.g.
        {{ .Content }}
     {{ end }}
 
+## Files
+
+### readDir
+
+Gets a directory listing from a directory relative to the current project working dir.
+
+So, If the project working dir has a single file named `README.txt`:
+
+`{{ range (readDir ".") }}{{ .Name }}{{ end }}` → "README.txt"
+
+### readFile
+Reads a file from disk and converts it into a string. Note that the filename must be relative to the current project working dir.
+ So, if you have a file with the name `README.txt` in the root of your project with the content `Hugo Rocks!`:
+
+ `{{readFile "README.txt"}}` → `"Hugo Rocks!"`
+
+### imageConfig
+Parses the image and returns the height, width and color model.
+
+e.g.
+```
+{{ with (imageConfig "favicon.ico") }}
+favicon.ico: {{.Width}} x {{.Height}}
+{{ end }}
+```
 
 ## Math
 
@@ -392,13 +437,20 @@ e.g.
 
 ### int
 
-Creates a `int`.
+Creates an `int`.
 
 e.g.
 
-* `{{int "123" }}` → 123
+* `{{ int "123" }}` → 123
 
 ## Strings
+
+### printf
+
+Format a string using the standard `fmt.Sprintf` function. See [the go
+doc](https://golang.org/pkg/fmt/) for reference.
+A
+e.g., `{{ i18n ( printf "combined_%s" $var ) }}` or `{{ printf "formatted %.2f" 3.1416 }}`
 
 ### chomp
 Removes any trailing newline characters. Useful in a pipeline to remove newlines added by other processing (including `markdownify`).
@@ -425,14 +477,38 @@ e.g. `{{ "I :heart: Hugo" | emojify }}`
 Takes a string of code and a language, uses Pygments to return the syntax highlighted code in HTML.
 Used in the [highlight shortcode](/extras/highlighting/).
 
+### htmlEscape
+HtmlEscape returns the given string with the critical reserved HTML codes escaped,
+such that `&` becomes `&amp;` and so on. It escapes only: `<`, `>`, `&`, `'` and `"`.
+
+Bear in mind that, unless content is passed to `safeHTML`, output strings are escaped
+usually by the processor anyway.
+
+e.g.
+`{{ htmlEscape "Hugo & Caddy > Wordpress & Apache" }} → "Hugo &amp; Caddy &gt; Wordpress &amp; Apache"`
+
+### htmlUnescape
+HtmlUnescape returns the given string with html escape codes un-escaped. This
+un-escapes more codes than `htmlEscape` escapes, including `#` codes and pre-UTF8
+escapes for accented characters. It defers completely to the Go `html.UnescapeString`
+function, so functionality is consistent with that codebase.
+
+Remember to pass the output of this to `safeHTML` if fully unescaped characters
+are desired, or the output will be escaped again as normal.
+
+e.g.
+`{{ htmlUnescape "Hugo &amp; Caddy &gt; Wordpress &amp; Apache" }} → "Hugo & Caddy > Wordpress & Apache"`
 
 ### humanize
-Humanize returns the humanized version of a string with the first letter capitalized.
+Humanize returns the humanized version of an argument with the first letter capitalized.
+If the input is either an int64 value or the string representation of an integer, humanize returns the number with the proper ordinal appended.
 
 e.g.
 ```
 {{humanize "my-first-post"}} → "My first post"
 {{humanize "myCamelPost"}} → "My camel post"
+{{humanize "52"}} → "52nd"
+{{humanize 103}} → "103rd"
 ```
 
 
@@ -458,6 +534,36 @@ e.g. `{{ "<b>BatMan</b>" | plainify }}` → "BatMan"
 Pluralize the given word with a set of common English pluralization rules.
 
 e.g. `{{ "cat" | pluralize }}` → "cats"
+
+### findRE
+Returns a list of strings that match the regular expression. By default all matches will be included. The number of matches can be limitted with an optional third parameter.
+
+The example below returns a list of all second level headers (`<h2>`) in the content:
+
+    {{ findRE "<h2.*?>(.|\n)*?</h2>" .Content }}
+
+We can limit the number of matches in that list with a third parameter. Let's say we want to have at most one match (or none if no substring matched):
+
+    {{ findRE "<h2.*?>(.|\n)*?</h2>" .Content 1 }}
+    <!-- returns ["<h2 id="#foo">Foo</h2>"] -->
+
+`findRE` allows us to build an automatically generated table of contents that could be used for a simple scrollspy:
+
+    {{ $headers := findRE "<h2.*?>(.|\n)*?</h2>" .Content }}
+
+    {{ if ge (len $headers) 1 }}
+        <ul>
+        {{ range $headers }}
+            <li>
+                <a href="#{{ . | plainify | urlize }}">
+                    {{ . | plainify }}
+                </a>
+            </li>
+        {{ end }}
+        </ul>
+    {{ end }}
+
+First, we try to find all second-level headers and generate a list if at least one header was found. `plainify` strips the HTML and `urlize` converts the header into an a valid URL.
 
 ### replace
 Replaces all occurrences of the search string with the replacement string.
@@ -493,7 +599,6 @@ rendering the whole string as plain-text like this:
 <p>© 2015 Jane Doe.  &lt;a href=&#34;http://creativecommons.org/licenses/by/4.0/&#34;&gt;Some rights reserved&lt;/a&gt;.</p>
 </blockquote>
 
-<!--
 ### safeHTMLAttr
 Declares the provided string as a "safe" HTML attribute
 from a trusted source, for example, ` dir="ltr"`,
@@ -507,8 +612,6 @@ Example: Given a site-wide `config.toml` that contains this menu entry:
 
 * `<a href="{{ .URL }}">` ⇒ `<a href="#ZgotmplZ">` (Bad!)
 * `<a {{ printf "href=%q" .URL | safeHTMLAttr }}>` ⇒ `<a href="irc://irc.freenode.net/#golang">` (Good!)
--->
-
 
 ### safeCSS
 Declares the provided string as a known "safe" CSS string
@@ -559,6 +662,14 @@ e.g.
 * `{{slicestr "BatMan" 3}}` → "Man"
 * `{{slicestr "BatMan" 0 3}}` → "Bat"
 
+### split
+
+Split a string into substrings separated by a delimiter.
+
+e.g.
+
+* `{{split "tag1,tag2,tag3" "," }}` → ["tag1" "tag2" "tag3"]
+
 ### string
 
 Creates a `string`.
@@ -586,6 +697,12 @@ e.g.
 
 * `{{substr "BatMan" 0 -3}}` → "Bat"
 * `{{substr "BatMan" 3 3}}` → "Man"
+
+### hasPrefix
+
+HasPrefix tests whether a string begins with prefix.
+
+* `{{ hasPrefix "Hugo" "Hu" }}` → true
 
 ### title
 Converts all characters in string to titlecase.
@@ -626,7 +743,6 @@ CJK-like languages.
 <!-- outputs a content length of 8 runes. -->
 ```
 
-
 ### md5
 
 `md5` hashes the given input and returns its MD5 checksum.
@@ -653,8 +769,49 @@ This can be useful if you want to use Gravatar for generating a unique avatar:
 ```
 
 
+### sha256
+
+`sha256` hashes the given input and returns its SHA256 checksum.
+
+```html
+{{ sha256 "Hello world, gophers!" }}
+<!-- returns the string "6ec43b78da9669f50e4e422575c54bf87536954ccd58280219c393f2ce352b46" -->
+```
+
+
+## Internationalization
+
+### i18n
+
+This translates a piece of content based on your `i18n/en-US.yaml`
+(and friends) files. You can use the [go-i18n](https://github.com/nicksnyder/go-i18n) tools to manage your translations.  The translations can exist in both the theme and at the root of your repository.
+
+e.g.: `{{ i18n "translation_id" }}`
+
+For more information about string translations, see [Translation of strings]({{< relref "content/multilingual.md#translation-of-strings">}}).
+
+### T
+
+`T` is an alias to `i18n`. E.g. `{{ T "translation_id" }}`.
+
+## Times
+
+### time
+
+`time` converts a timestamp string into a [`time.Time`](https://godoc.org/time#Time) structure so you can access its fields. E.g.
+
+* `{{ time "2016-05-28" }}` → "2016-05-28T00:00:00Z"
+* `{{ (time "2016-05-28").YearDay }}` → 149
+* `{{ mul 1000 (time "2016-05-28T10:30:00.00+10:00").Unix }}` → 1464395400000 (Unix time in milliseconds)
 
 ## URLs
+### absLangURL, relLangURL
+These are similar to the `absURL` and `relURL` relatives below, but will add the correct language prefix when the site is configured with more than one language.
+
+So for a site  `baseURL` set to `http://mysite.com/hugo/` and the current language is `en`:
+
+* `{{ "blog/" | absLangURL }}` → "http://mysite.com/hugo/en/blog/"
+* `{{ "blog/" | relLangURL }}` → "/hugo/en/blog/"
 
 ### absURL, relURL
 
@@ -685,7 +842,7 @@ The above also exploits the fact that the Go template parser JSON-encodes object
 
 
 ### ref, relref
-Looks up a content page by relative path or logical name to return the permalink (`ref`) or relative permalink (`relref`). Requires a Node or Page object (usually satisfied with `.`). Used in the [`ref` and `relref` shortcodes]({{% ref "extras/crossreferences.md" %}}).
+Looks up a content page by relative path or logical name to return the permalink (`ref`) or relative permalink (`relref`). Requires a `Page` object (usually satisfied with `.`). Used in the [`ref` and `relref` shortcodes]({{% ref "extras/crossreferences.md" %}}).
 
 e.g. {{ ref . "about.md" }}
 
@@ -733,6 +890,16 @@ Takes a string and sanitizes it for usage in URLs, converts spaces to "-".
 
 e.g. `<a href="/tags/{{ . | urlize }}">{{ . }}</a>`
 
+
+### querify
+
+Takes a set of key-value pairs and returns a [`url.Values`](https://godoc.org/net/url#Values) object. The [`Encode`](https://godoc.org/net/url#Values.Encode) method turns the pairs into a [query string](https://en.wikipedia.org/wiki/Query_string) that can be appended to a url. E.g. 
+
+    <a href="https://www.google.com?{{ (querify "q" "test" "page" 3).Encode | safeHTML }}">Search</a>
+
+will be rendered as 
+
+    <a href="https://www.google.com?page=3&q=test">Search</a>
 
 
 ## Content Views
@@ -843,3 +1010,17 @@ responses of APIs.
     {{ $resp.content | base64Decode | markdownify }}
 
 The response of the GitHub API contains the base64-encoded version of the [README.md](https://github.com/spf13/hugo/blob/master/README.md) in the Hugo repository. Now we can decode it and parse the Markdown. The final output will look similar to the rendered version on GitHub.
+
+
+## .Site.GetPage
+Every `Page` has a `Kind` attribute that shows what kind of page it is. While this attribute can be used to list pages of a certain `kind` using `where`, often it can be useful to fetch a single page by its path.
+
+`GetPage` looks up an index page of a given `Kind` and `path`. This method may support regular pages in the future, but currently it is a convenient way of getting the index pages, such as the home page or a section, from a template:
+
+```
+ {{ with .Site.GetPage "section" "blog" }}{{ .Title }}{{ end }}
+ ```
+ 
+This method wil return `nil` when no page could be found, so the above will not print anything if the blog section isn't found.
+
+The valid page kinds are: *home, section, taxonomy and taxonomyTerm.*

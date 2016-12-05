@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2016 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,8 +26,8 @@ import (
 	jww "github.com/spf13/jwalterweatherman"
 )
 
-const alias = "<!DOCTYPE html><html><head><link rel=\"canonical\" href=\"{{ .Permalink }}\"/><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\" /><meta http-equiv=\"refresh\" content=\"0;url={{ .Permalink }}\" /></head></html>"
-const aliasXHtml = "<!DOCTYPE html><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><link rel=\"canonical\" href=\"{{ .Permalink }}\"/><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\" /><meta http-equiv=\"refresh\" content=\"0;url={{ .Permalink }}\" /></head></html>"
+const alias = "<!DOCTYPE html><html><head><title>{{ .Permalink }}</title><link rel=\"canonical\" href=\"{{ .Permalink }}\"/><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\" /><meta http-equiv=\"refresh\" content=\"0; url={{ .Permalink }}\" /></head></html>"
+const aliasXHtml = "<!DOCTYPE html><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{{ .Permalink }}</title><link rel=\"canonical\" href=\"{{ .Permalink }}\"/><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\" /><meta http-equiv=\"refresh\" content=\"0; url={{ .Permalink }}\" /></head></html>"
 
 var defaultAliasTemplates *template.Template
 
@@ -39,12 +39,13 @@ func init() {
 
 type AliasPublisher interface {
 	Translator
-	Publish(string, string) error
+	Publish(path string, permalink string, page interface{}) error
 }
 
 type HTMLRedirectAlias struct {
 	PublishDir string
 	Templates  *template.Template
+	AllowRoot  bool // for the language redirects
 }
 
 func (h *HTMLRedirectAlias) Translate(alias string) (aliasPath string, err error) {
@@ -56,7 +57,7 @@ func (h *HTMLRedirectAlias) Translate(alias string) (aliasPath string, err error
 	alias = filepath.Clean(alias)
 	components := strings.Split(alias, helpers.FilePathSeparator)
 
-	if alias == helpers.FilePathSeparator {
+	if !h.AllowRoot && alias == helpers.FilePathSeparator {
 		return "", fmt.Errorf("Alias \"%s\" resolves to website root directory", originalAlias)
 	}
 
@@ -103,9 +104,7 @@ func (h *HTMLRedirectAlias) Translate(alias string) (aliasPath string, err error
 	}
 
 	// Add the final touch
-	if strings.HasPrefix(alias, helpers.FilePathSeparator) {
-		alias = alias[1:]
-	}
+	alias = strings.TrimPrefix(alias, helpers.FilePathSeparator)
 	if strings.HasSuffix(alias, helpers.FilePathSeparator) {
 		alias = alias + "index.html"
 	} else if !strings.HasSuffix(alias, ".html") {
@@ -120,9 +119,10 @@ func (h *HTMLRedirectAlias) Translate(alias string) (aliasPath string, err error
 
 type AliasNode struct {
 	Permalink string
+	Page      interface{}
 }
 
-func (h *HTMLRedirectAlias) Publish(path string, permalink string) (err error) {
+func (h *HTMLRedirectAlias) Publish(path string, permalink string, page interface{}) (err error) {
 	if path, err = h.Translate(path); err != nil {
 		jww.ERROR.Printf("%s, skipping.", err)
 		return nil
@@ -136,13 +136,14 @@ func (h *HTMLRedirectAlias) Publish(path string, permalink string) (err error) {
 	template := defaultAliasTemplates
 	if h.Templates != nil {
 		template = h.Templates
+		t = "alias.html"
 	}
 
 	buffer := new(bytes.Buffer)
-	err = template.ExecuteTemplate(buffer, t, &AliasNode{permalink})
+	err = template.ExecuteTemplate(buffer, t, &AliasNode{permalink, page})
 	if err != nil {
 		return
 	}
 
-	return helpers.WriteToDisk(path, buffer, hugofs.DestinationFS)
+	return helpers.WriteToDisk(path, buffer, hugofs.Destination())
 }

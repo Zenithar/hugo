@@ -66,6 +66,9 @@ func (scp *ShortcodeWithPage) Scratch() *Scratch {
 
 // Get is a convenience method to look up shortcode parameters by its key.
 func (scp *ShortcodeWithPage) Get(key interface{}) interface{} {
+	if scp.Params == nil {
+		return nil
+	}
 	if reflect.ValueOf(scp.Params).Len() == 0 {
 		return nil
 	}
@@ -157,7 +160,11 @@ func HandleShortcodes(stringToParse string, page *Page, t tpl.Template) (string,
 	}
 
 	if len(tmpShortcodes) > 0 {
-		tmpContentWithTokensReplaced, err := replaceShortcodeTokens([]byte(tmpContent), shortcodePlaceholderPrefix, tmpShortcodes)
+		shortcodes, err := executeShortcodeFuncMap(tmpShortcodes)
+		if err != nil {
+			return "", err
+		}
+		tmpContentWithTokensReplaced, err := replaceShortcodeTokens([]byte(tmpContent), shortcodePlaceholderPrefix, shortcodes)
 
 		if err != nil {
 			return "", fmt.Errorf("Fail to replace short code tokens in %s:\n%s", page.BaseFileName(), err.Error())
@@ -197,7 +204,7 @@ func isInnerShortcode(t *template.Template) (bool, error) {
 }
 
 func createShortcodePlaceholder(id int) string {
-	return fmt.Sprintf("{#{#%s-%d#}#}", shortcodePlaceholderPrefix, id)
+	return fmt.Sprintf("HAHA%s-%dHBHB", shortcodePlaceholderPrefix, id)
 }
 
 const innerNewlineRegexp = "\n"
@@ -234,8 +241,11 @@ func renderShortcode(sc shortcode, parent *ShortcodeWithPage, p *Page, t tpl.Tem
 
 		if sc.doMarkup {
 			newInner := helpers.RenderBytes(&helpers.RenderingContext{
-				Content: []byte(inner), PageFmt: p.guessMarkupType(),
-				DocumentID: p.UniqueID(), Config: p.getRenderingConfig()})
+				Content: []byte(inner), PageFmt: p.determineMarkupType(),
+				ConfigProvider: p.Language(),
+				DocumentID:     p.UniqueID(),
+				DocumentName:   p.Path(),
+				Config:         p.getRenderingConfig()})
 
 			// If the type is “unknown” or “markdown”, we assume the markdown
 			// generation has been performed. Given the input: `a line`, markdown
@@ -250,7 +260,7 @@ func renderShortcode(sc shortcode, parent *ShortcodeWithPage, p *Page, t tpl.Tem
 			//     substitutions in <div>HUGOSHORTCODE-1</div> which prevents the
 			//     generation, but means that you can’t use shortcodes inside of
 			//     markdown structures itself (e.g., `[foo]({{% ref foo.md %}})`).
-			switch p.guessMarkupType() {
+			switch p.determineMarkupType() {
 			case "unknown", "markdown":
 				if match, _ := regexp.MatchString(innerNewlineRegexp, inner); !match {
 					cleaner, err := regexp.Compile(innerCleanupRegexp)
@@ -271,11 +281,7 @@ func renderShortcode(sc shortcode, parent *ShortcodeWithPage, p *Page, t tpl.Tem
 	return renderShortcodeWithPage(tmpl, data)
 }
 
-func extractAndRenderShortcodes(stringToParse string, p *Page, t tpl.Template) (string, map[string]string, error) {
-
-	if p.rendered {
-		panic("Illegal state: Page already marked as rendered, please reuse the shortcodes")
-	}
+func extractAndRenderShortcodes(stringToParse string, p *Page, t tpl.Template) (string, map[string]func() (string, error), error) {
 
 	content, shortcodes, err := extractShortcodes(stringToParse, p, t)
 
@@ -294,15 +300,32 @@ func extractAndRenderShortcodes(stringToParse string, p *Page, t tpl.Template) (
 
 }
 
-func renderShortcodes(shortcodes map[string]shortcode, p *Page, t tpl.Template) map[string]string {
-	renderedShortcodes := make(map[string]string)
+var emptyShortcodeFn = func() (string, error) { return "", nil }
+
+func executeShortcodeFuncMap(funcs map[string]func() (string, error)) (map[string]string, error) {
+	result := make(map[string]string)
+
+	for k, v := range funcs {
+		s, err := v()
+		if err != nil {
+			return nil, fmt.Errorf("Failed to execute shortcode with key %s: %s", k, err)
+		}
+		result[k] = s
+	}
+
+	return result, nil
+}
+
+func renderShortcodes(shortcodes map[string]shortcode, p *Page, t tpl.Template) map[string]func() (string, error) {
+	renderedShortcodes := make(map[string]func() (string, error))
 
 	for key, sc := range shortcodes {
 		if sc.err != nil {
 			// need to have something to replace with
-			renderedShortcodes[key] = ""
+			renderedShortcodes[key] = emptyShortcodeFn
 		} else {
-			renderedShortcodes[key] = renderShortcode(sc, nil, p, t)
+			shorctode := sc
+			renderedShortcodes[key] = func() (string, error) { return renderShortcode(shorctode, nil, p, t), nil }
 		}
 	}
 
@@ -507,8 +530,8 @@ func replaceShortcodeTokens(source []byte, prefix string, replacements map[strin
 	sourceLen := len(source)
 	start := 0
 
-	pre := []byte("{#{#" + prefix)
-	post := []byte("#}#}")
+	pre := []byte("HAHA" + prefix)
+	post := []byte("HBHB")
 	pStart := []byte("<p>")
 	pEnd := []byte("</p>")
 
@@ -558,7 +581,9 @@ func renderShortcodeWithPage(tmpl *template.Template, data *ShortcodeWithPage) s
 	buffer := bp.GetBuffer()
 	defer bp.PutBuffer(buffer)
 
+	isInnerShortcodeCache.RLock()
 	err := tmpl.Execute(buffer, data)
+	isInnerShortcodeCache.RUnlock()
 	if err != nil {
 		jww.ERROR.Println("error processing shortcode", tmpl.Name(), "\n ERR:", err)
 		jww.WARN.Println(data)

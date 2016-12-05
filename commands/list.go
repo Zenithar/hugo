@@ -14,17 +14,18 @@
 package commands
 
 import (
-	"fmt"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/hugo/hugolib"
+	jww "github.com/spf13/jwalterweatherman"
 	"github.com/spf13/viper"
 )
 
 func init() {
 	listCmd.AddCommand(listDraftsCmd)
 	listCmd.AddCommand(listFutureCmd)
+	listCmd.AddCommand(listExpiredCmd)
 	listCmd.PersistentFlags().StringVarP(&source, "source", "s", "", "filesystem path to read files relative from")
 	listCmd.PersistentFlags().SetAnnotation("source", cobra.BashCompSubdirsInDir, []string{})
 }
@@ -48,17 +49,21 @@ var listDraftsCmd = &cobra.Command{
 			return err
 		}
 
-		viper.Set("BuildDrafts", true)
+		viper.Set("buildDrafts", true)
 
-		site := &hugolib.Site{}
+		sites, err := hugolib.NewHugoSitesFromConfiguration()
 
-		if err := site.Process(); err != nil {
+		if err != nil {
+			return newSystemError("Error creating sites", err)
+		}
+
+		if err := sites.Build(hugolib.BuildCfg{SkipRender: true}); err != nil {
 			return newSystemError("Error Processing Source Content", err)
 		}
 
-		for _, p := range site.Pages {
+		for _, p := range sites.Pages() {
 			if p.IsDraft() {
-				fmt.Println(filepath.Join(p.File.Dir(), p.File.LogicalName()))
+				jww.FEEDBACK.Println(filepath.Join(p.File.Dir(), p.File.LogicalName()))
 			}
 
 		}
@@ -79,17 +84,56 @@ posted in the future.`,
 			return err
 		}
 
-		viper.Set("BuildFuture", true)
+		viper.Set("buildFuture", true)
 
-		site := &hugolib.Site{}
+		sites, err := hugolib.NewHugoSitesFromConfiguration()
 
-		if err := site.Process(); err != nil {
+		if err != nil {
+			return newSystemError("Error creating sites", err)
+		}
+
+		if err := sites.Build(hugolib.BuildCfg{SkipRender: true}); err != nil {
 			return newSystemError("Error Processing Source Content", err)
 		}
 
-		for _, p := range site.Pages {
+		for _, p := range sites.Pages() {
 			if p.IsFuture() {
-				fmt.Println(filepath.Join(p.File.Dir(), p.File.LogicalName()))
+				jww.FEEDBACK.Println(filepath.Join(p.File.Dir(), p.File.LogicalName()))
+			}
+
+		}
+
+		return nil
+
+	},
+}
+
+var listExpiredCmd = &cobra.Command{
+	Use:   "expired",
+	Short: "List all posts already expired",
+	Long: `List all of the posts in your content directory which has already
+expired.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+
+		if err := InitializeConfig(); err != nil {
+			return err
+		}
+
+		viper.Set("buildExpired", true)
+
+		sites, err := hugolib.NewHugoSitesFromConfiguration()
+
+		if err != nil {
+			return newSystemError("Error creating sites", err)
+		}
+
+		if err := sites.Build(hugolib.BuildCfg{SkipRender: true}); err != nil {
+			return newSystemError("Error Processing Source Content", err)
+		}
+
+		for _, p := range sites.Pages() {
+			if p.IsExpired() {
+				jww.FEEDBACK.Println(filepath.Join(p.File.Dir(), p.File.LogicalName()))
 			}
 
 		}

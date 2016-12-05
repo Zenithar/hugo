@@ -7,7 +7,7 @@ menu:
   main:
     parent: layout
 next: /templates/rss
-prev: /templates/views
+prev: /templates/blocks/
 title: Partial Templates
 weight: 80
 toc: true
@@ -33,9 +33,6 @@ like good names to use for inclusion in your other templates.
       ▾ partials/
           header.html
           footer.html
-
-By ensuring that we only reference [variables](/layout/variables/)
-used for both nodes and pages, we can use the same partials for both.
 
 ## Partial vs Template
 
@@ -65,7 +62,7 @@ This header template is used for [spf13.com](http://spf13.com/):
         <base href="{{ .Site.BaseURL }}">
         <title> {{ .Title }} : spf13.com </title>
         <link rel="canonical" href="{{ .Permalink }}">
-        {{ if .RSSlink }}<link href="{{ .RSSlink }}" rel="alternate" type="application/rss+xml" title="{{ .Title }}" />{{ end }}
+        {{ if .RSSLink }}<link href="{{ .RSSLink }}" rel="alternate" type="application/rss+xml" title="{{ .Title }}" />{{ end }}
 
         {{ partial "head_includes.html" . }}
     </head>
@@ -116,12 +113,12 @@ For more examples of referencing these templates, see
 Variable scoping
 ----------------
 
-As you might have noticed, `partial` calls receive two paramters.
+As you might have noticed, `partial` calls receive two parameters.
 
 1. The first is the name of the partial and determines the file
 location to be read.
 2. The second is the variables to be passed down to the partial.
 
-This means the partial _only_ be able to access those variables. It is
+This means that the partial will _only_ be able to access those variables. It is
 isolated and has no access to the outer scope. From within the
 partial, `$.Var` is equivalent to `.Var`

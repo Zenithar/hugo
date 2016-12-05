@@ -14,11 +14,12 @@
 package commands
 
 import (
-	"fmt"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"reflect"
 	"sort"
+
+	"github.com/spf13/cobra"
+	jww "github.com/spf13/jwalterweatherman"
+	"github.com/spf13/viper"
 )
 
 var configCmd = &cobra.Command{
@@ -28,7 +29,6 @@ var configCmd = &cobra.Command{
 }
 
 func init() {
-	initCoreCommonFlags(configCmd)
 	configCmd.RunE = config
 }
 
@@ -54,9 +54,9 @@ func config(cmd *cobra.Command, args []string) error {
 	for _, k := range keys {
 		kv := reflect.ValueOf(allSettings[k])
 		if kv.Kind() == reflect.String {
-			fmt.Printf("%s%s\"%+v\"\n", k, separator, allSettings[k])
+			jww.FEEDBACK.Printf("%s%s\"%+v\"\n", k, separator, allSettings[k])
 		} else {
-			fmt.Printf("%s%s%+v\n", k, separator, allSettings[k])
+			jww.FEEDBACK.Printf("%s%s%+v\n", k, separator, allSettings[k])
 		}
 	}
 

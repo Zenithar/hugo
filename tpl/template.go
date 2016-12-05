@@ -15,6 +15,12 @@ package tpl
 
 import (
 	"fmt"
+	"html/template"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/eknkc/amber"
 	"github.com/spf13/afero"
 	bp "github.com/spf13/hugo/bufferpool"
@@ -22,11 +28,6 @@ import (
 	"github.com/spf13/hugo/hugofs"
 	jww "github.com/spf13/jwalterweatherman"
 	"github.com/yosssi/ace"
-	"html/template"
-	"io"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
 var localTemplates *template.Template
@@ -67,7 +68,7 @@ type GoHTMLTemplate struct {
 	errors []*templateErr
 }
 
-// The "Global" Template System
+// T is the "global" template system
 func T() Template {
 	if tmpl == nil {
 		tmpl = New()
@@ -93,6 +94,10 @@ func New() Template {
 
 	localTemplates = &templates.Template
 
+	// The URL funcs in the funcMap is somewhat language dependent,
+	// so we need to wait until the language and site config is loaded.
+	initFuncMap()
+
 	for k, v := range funcMap {
 		amber.FuncMap[k] = v
 	}
@@ -116,19 +121,18 @@ func partial(name string, contextList ...interface{}) template.HTML {
 }
 
 func executeTemplate(context interface{}, w io.Writer, layouts ...string) {
-	worked := false
+	var worked bool
 	for _, layout := range layouts {
-
-		name := layout
-
-		if Lookup(name) == nil {
-			name = layout + ".html"
+		templ := Lookup(layout)
+		if templ == nil {
+			layout += ".html"
+			templ = Lookup(layout)
 		}
 
-		if templ := Lookup(name); templ != nil {
-			err := templ.Execute(w, context)
-			if err != nil {
-				jww.ERROR.Println(err, "in", name)
+		if templ != nil {
+			if err := templ.Execute(w, context); err != nil {
+				// Printing the err is spammy, see https://github.com/golang/go/issues/17414
+				helpers.DistinctErrorLog.Println(layout, "is an incomplete or empty template")
 			}
 			worked = true
 			break
@@ -209,11 +213,16 @@ func (t *GoHTMLTemplate) AddInternalShortcode(name, content string) error {
 
 func (t *GoHTMLTemplate) AddTemplate(name, tpl string) error {
 	t.checkState()
-	_, err := t.New(name).Parse(tpl)
+	templ, err := t.New(name).Parse(tpl)
 	if err != nil {
 		t.errors = append(t.errors, &templateErr{name: name, err: err})
+		return err
 	}
-	return err
+	if err := applyTemplateTransformers(templ); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (t *GoHTMLTemplate) AddTemplateFileWithMaster(name, overlayFilename, masterFilename string) error {
@@ -235,7 +244,7 @@ func (t *GoHTMLTemplate) AddTemplateFileWithMaster(name, overlayFilename, master
 	masterTpl := t.Lookup(masterFilename)
 
 	if masterTpl == nil {
-		b, err := afero.ReadFile(hugofs.SourceFs, masterFilename)
+		b, err := afero.ReadFile(hugofs.Source(), masterFilename)
 		if err != nil {
 			return err
 		}
@@ -248,7 +257,7 @@ func (t *GoHTMLTemplate) AddTemplateFileWithMaster(name, overlayFilename, master
 		}
 	}
 
-	b, err := afero.ReadFile(hugofs.SourceFs, overlayFilename)
+	b, err := afero.ReadFile(hugofs.Source(), overlayFilename)
 	if err != nil {
 		return err
 	}
@@ -257,6 +266,13 @@ func (t *GoHTMLTemplate) AddTemplateFileWithMaster(name, overlayFilename, master
 	if err != nil {
 		t.errors = append(t.errors, &templateErr{name: name, err: err})
 	} else {
+		// The extra lookup is a workaround, see
+		// * https://github.com/golang/go/issues/16101
+		// * https://github.com/spf13/hugo/issues/2549
+		overlayTpl = overlayTpl.Lookup(overlayTpl.Name())
+		if err := applyTemplateTransformers(overlayTpl); err != nil {
+			return err
+		}
 		t.overlays[name] = overlayTpl
 	}
 
@@ -284,11 +300,12 @@ func (t *GoHTMLTemplate) AddAceTemplate(name, basePath, innerPath string, baseCo
 		t.errors = append(t.errors, &templateErr{name: name, err: err})
 		return err
 	}
-	_, err = ace.CompileResultWithTemplate(t.New(name), parsed, nil)
+	templ, err := ace.CompileResultWithTemplate(t.New(name), parsed, nil)
 	if err != nil {
 		t.errors = append(t.errors, &templateErr{name: name, err: err})
+		return err
 	}
-	return err
+	return applyTemplateTransformers(templ)
 }
 
 func (t *GoHTMLTemplate) AddTemplateFile(name, baseTemplatePath, path string) error {
@@ -299,24 +316,33 @@ func (t *GoHTMLTemplate) AddTemplateFile(name, baseTemplatePath, path string) er
 	case ".amber":
 		templateName := strings.TrimSuffix(name, filepath.Ext(name)) + ".html"
 		compiler := amber.New()
-		// Parse the input file
-		if err := compiler.ParseFile(path); err != nil {
+		b, err := afero.ReadFile(hugofs.Source(), path)
+
+		if err != nil {
 			return err
 		}
 
-		if _, err := compiler.CompileWithTemplate(t.New(templateName)); err != nil {
+		// Parse the input data
+		if err := compiler.ParseData(b, path); err != nil {
 			return err
 		}
+
+		templ, err := compiler.CompileWithTemplate(t.New(templateName))
+		if err != nil {
+			return err
+		}
+
+		return applyTemplateTransformers(templ)
 	case ".ace":
 		var innerContent, baseContent []byte
-		innerContent, err := afero.ReadFile(hugofs.SourceFs, path)
+		innerContent, err := afero.ReadFile(hugofs.Source(), path)
 
 		if err != nil {
 			return err
 		}
 
 		if baseTemplatePath != "" {
-			baseContent, err = afero.ReadFile(hugofs.SourceFs, baseTemplatePath)
+			baseContent, err = afero.ReadFile(hugofs.Source(), baseTemplatePath)
 			if err != nil {
 				return err
 			}
@@ -329,16 +355,16 @@ func (t *GoHTMLTemplate) AddTemplateFile(name, baseTemplatePath, path string) er
 			return t.AddTemplateFileWithMaster(name, path, baseTemplatePath)
 		}
 
-		b, err := afero.ReadFile(hugofs.SourceFs, path)
+		b, err := afero.ReadFile(hugofs.Source(), path)
 
 		if err != nil {
 			return err
 		}
 
+		jww.DEBUG.Printf("Add template file from path %s", path)
+
 		return t.AddTemplate(name, string(b))
 	}
-
-	return nil
 
 }
 
@@ -365,18 +391,19 @@ func isBaseTemplate(path string) bool {
 }
 
 func (t *GoHTMLTemplate) loadTemplates(absPath string, prefix string) {
+	jww.DEBUG.Printf("Load templates from path %q prefix %q", absPath, prefix)
 	walker := func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
-
+		jww.DEBUG.Println("Template path", path)
 		if fi.Mode()&os.ModeSymlink == os.ModeSymlink {
 			link, err := filepath.EvalSymlinks(absPath)
 			if err != nil {
 				jww.ERROR.Printf("Cannot read symbolic link '%s', error was: %s", absPath, err)
 				return nil
 			}
-			linkfi, err := os.Stat(link)
+			linkfi, err := hugofs.Source().Stat(link)
 			if err != nil {
 				jww.ERROR.Printf("Cannot stat '%s', error was: %s", link, err)
 				return nil
@@ -414,7 +441,7 @@ func (t *GoHTMLTemplate) loadTemplates(absPath string, prefix string) {
 
 				// This may be a view that shouldn't have base template
 				// Have to look inside it to make sure
-				needsBase, err := helpers.FileContainsAny(path, innerMarkers, hugofs.OsFs)
+				needsBase, err := helpers.FileContainsAny(path, innerMarkers, hugofs.Source())
 				if err != nil {
 					return err
 				}
@@ -442,7 +469,7 @@ func (t *GoHTMLTemplate) loadTemplates(absPath string, prefix string) {
 					}
 
 					for _, pathToCheck := range pathsToCheck {
-						if ok, err := helpers.Exists(pathToCheck, hugofs.OsFs); err == nil && ok {
+						if ok, err := helpers.Exists(pathToCheck, hugofs.Source()); err == nil && ok {
 							baseTemplatePath = pathToCheck
 							break
 						}
@@ -450,13 +477,16 @@ func (t *GoHTMLTemplate) loadTemplates(absPath string, prefix string) {
 				}
 			}
 
-			t.AddTemplateFile(tplName, baseTemplatePath, path)
+			if err := t.AddTemplateFile(tplName, baseTemplatePath, path); err != nil {
+				jww.ERROR.Printf("Failed to add template %s in path %s: %s", tplName, path, err)
+			}
 
 		}
 		return nil
 	}
-
-	filepath.Walk(absPath, walker)
+	if err := helpers.SymbolicWalk(hugofs.Source(), absPath, walker); err != nil {
+		jww.ERROR.Printf("Failed to load templates: %s", err)
+	}
 }
 
 func (t *GoHTMLTemplate) LoadTemplatesWithPrefix(absPath string, prefix string) {

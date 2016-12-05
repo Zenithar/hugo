@@ -1,7 +1,7 @@
 ---
 aliases:
 - /indexes/displaying/
-lastmod: 2015-05-22
+lastmod: 2016-06-29
 date: 2013-07-01
 linktitle: Displaying
 menu:
@@ -38,9 +38,26 @@ each content piece are located in the usual place
 
     <ul id="tags">
       {{ range .Params.tags }}
-        <li><a href="tags/{{ . | urlize }}">{{ . }}</a> </li>
+        <li><a href="{{ "/tags/" | relLangURL }}{{ . | urlize }}">{{ . }}</a> </li>
       {{ end }}
     </ul>
+
+If you want to list taxonomies inline, you will have to take
+care of optional plural ending in the title (if multiple taxonomies),
+as well as commas. Let's say we have a taxonomy "directors" such as
+`directors: [ "Joel Coen", "Ethan Coen" ]` in the TOML-format front matter.
+To list such taxonomy use the following:
+
+### Example
+
+    {{ if .Params.directors }}
+      <strong>Director{{ if gt (len .Params.directors) 1 }}s{{ end }}:</strong>
+      {{ range $index, $director := .Params.directors }}{{ if gt $index 0 }}, {{ end }}<a href="{{ "/directors/" | relURL }}{{ . | urlize }}">{{ . }}</a>{{ end }}
+    {{ end }}
+
+Alternatively, you may use the [delimit]({{< relref "templates/functions.md#delimit" >}})
+template function as a shortcut if the taxonomies should just be listed
+with a separator.  See {{< gh 2143 >}} on GitHub for discussion.
 
 ## 2. Listing content with the same taxonomy term
 
@@ -54,7 +71,7 @@ content.
 
     <ul>
       {{ range .Site.Taxonomies.series.golang }}
-        <li><a href="{{ .URL }}">{{ .Name }}</a></li>
+        <li><a href="{{ .Page.RelPermalink }}">{{ .Page.Title }}</a></li>
       {{ end }}
     </ul>
 
@@ -93,7 +110,7 @@ The following example displays all tag keys:
 
     <ul id="all-tags">
       {{ range $name, $taxonomy := .Site.Taxonomies.tags }}
-        <li><a href="/tags/{{ $name | urlize }}">{{ $name }}</a></li>
+        <li><a href="{{ "/tags/" | relLangURL }}{{ $name | urlize }}">{{ $name }}</a></li>
       {{ end }}
     </ul>
 
@@ -103,7 +120,7 @@ This example will list all taxonomies, each of their keys and all the content as
     <section>
       <ul>
         {{ range $taxonomyname, $taxonomy := .Site.Taxonomies }}
-          <li><a href="/{{ $taxonomyname | urlize }}">{{ $taxonomyname }}</a>
+          <li><a href="{{ "/" | relLangURL}}{{ $taxonomyname | urlize }}">{{ $taxonomyname }}</a>
             <ul>
               {{ range $key, $value := $taxonomy }}
               <li> {{ $key }} </li>
@@ -118,4 +135,3 @@ This example will list all taxonomies, each of their keys and all the content as
         {{ end }}
       </ul>
     </section>
-

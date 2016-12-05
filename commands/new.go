@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2016 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -89,11 +89,11 @@ func NewContent(cmd *cobra.Command, args []string) error {
 	}
 
 	if flagChanged(cmd.Flags(), "format") {
-		viper.Set("MetaDataFormat", configFormat)
+		viper.Set("metaDataFormat", configFormat)
 	}
 
 	if flagChanged(cmd.Flags(), "editor") {
-		viper.Set("NewContentEditor", contentEditor)
+		viper.Set("newContentEditor", contentEditor)
 	}
 
 	if len(args) < 1 {
@@ -110,7 +110,7 @@ func NewContent(cmd *cobra.Command, args []string) error {
 		kind = contentType
 	}
 
-	return create.NewContent(hugofs.SourceFs, kind, createpath)
+	return create.NewContent(hugofs.Source(), kind, createpath)
 }
 
 func doNewSite(basepath string, force bool) error {
@@ -123,12 +123,12 @@ func doNewSite(basepath string, force bool) error {
 		filepath.Join(basepath, "themes"),
 	}
 
-	if exists, _ := helpers.Exists(basepath, hugofs.SourceFs); exists {
-		if isDir, _ := helpers.IsDir(basepath, hugofs.SourceFs); !isDir {
+	if exists, _ := helpers.Exists(basepath, hugofs.Source()); exists {
+		if isDir, _ := helpers.IsDir(basepath, hugofs.Source()); !isDir {
 			return errors.New(basepath + " already exists but not a directory")
 		}
 
-		isEmpty, _ := helpers.IsEmpty(basepath, hugofs.SourceFs)
+		isEmpty, _ := helpers.IsEmpty(basepath, hugofs.Source())
 
 		switch {
 		case !isEmpty && !force:
@@ -137,7 +137,7 @@ func doNewSite(basepath string, force bool) error {
 		case !isEmpty && force:
 			all := append(dirs, filepath.Join(basepath, "config."+configFormat))
 			for _, path := range all {
-				if exists, _ := helpers.Exists(path, hugofs.SourceFs); exists {
+				if exists, _ := helpers.Exists(path, hugofs.Source()); exists {
 					return errors.New(path + " already exists")
 				}
 			}
@@ -145,14 +145,36 @@ func doNewSite(basepath string, force bool) error {
 	}
 
 	for _, dir := range dirs {
-		hugofs.SourceFs.MkdirAll(dir, 0777)
+		hugofs.Source().MkdirAll(dir, 0777)
 	}
 
 	createConfig(basepath, configFormat)
 
-	jww.FEEDBACK.Printf("Congratulations! Your new Hugo site is created in %q.\n", basepath)
+	jww.FEEDBACK.Printf("Congratulations! Your new Hugo site is created in %s.\n\n", basepath)
+	jww.FEEDBACK.Println(nextStepsText())
 
 	return nil
+}
+
+func nextStepsText() string {
+	var nextStepsText bytes.Buffer
+
+	nextStepsText.WriteString(`Just a few more steps and you're ready to go:
+
+1. Download a theme into the same-named folder.
+   Choose a theme from https://themes.gohugo.io/, or
+   create your own with the "hugo new theme <THEMENAME>" command.
+2. Perhaps you want to add some content. You can add single files
+   with "hugo new `)
+
+	nextStepsText.WriteString(filepath.Join("<SECTIONNAME>", "<FILENAME>.<FORMAT>"))
+
+	nextStepsText.WriteString(`".
+3. Start the built-in live server via "hugo server".
+
+Visit https://gohugo.io/ for quickstart guide and full documentation.`)
+
+	return nextStepsText.String()
 }
 
 // NewSite creates a new Hugo site and initializes a structured Hugo directory.
@@ -185,7 +207,7 @@ func NewTheme(cmd *cobra.Command, args []string) error {
 	createpath := helpers.AbsPathify(filepath.Join(viper.GetString("themesDir"), args[0]))
 	jww.INFO.Println("creating theme at", createpath)
 
-	if x, _ := helpers.Exists(createpath, hugofs.SourceFs); x {
+	if x, _ := helpers.Exists(createpath, hugofs.Source()); x {
 		return newUserError(createpath, "already exists")
 	}
 
@@ -204,7 +226,7 @@ func NewTheme(cmd *cobra.Command, args []string) error {
 
 	archDefault := []byte("+++\n+++\n")
 
-	err := helpers.WriteToDisk(filepath.Join(createpath, "archetypes", "default.md"), bytes.NewReader(archDefault), hugofs.SourceFs)
+	err := helpers.WriteToDisk(filepath.Join(createpath, "archetypes", "default.md"), bytes.NewReader(archDefault), hugofs.Source())
 	if err != nil {
 		return err
 	}
@@ -234,7 +256,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 `)
 
-	err = helpers.WriteToDisk(filepath.Join(createpath, "LICENSE.md"), bytes.NewReader(by), hugofs.SourceFs)
+	err = helpers.WriteToDisk(filepath.Join(createpath, "LICENSE.md"), bytes.NewReader(by), hugofs.Source())
 	if err != nil {
 		return err
 	}
@@ -256,7 +278,7 @@ func mkdir(x ...string) {
 func touchFile(x ...string) {
 	inpath := filepath.Join(x...)
 	mkdir(filepath.Dir(inpath))
-	err := helpers.WriteToDisk(inpath, bytes.NewReader([]byte{}), hugofs.SourceFs)
+	err := helpers.WriteToDisk(inpath, bytes.NewReader([]byte{}), hugofs.Source())
 	if err != nil {
 		jww.FATAL.Fatalln(err)
 	}
@@ -274,7 +296,7 @@ description = ""
 homepage = "http://siteforthistheme.com/"
 tags = ["", ""]
 features = ["", ""]
-min_version = 0.15
+min_version = 0.17
 
 [author]
   name = ""
@@ -287,7 +309,7 @@ min_version = 0.15
   repo = ""
 `)
 
-	err = helpers.WriteToDisk(filepath.Join(inpath, "theme.toml"), bytes.NewReader(by), hugofs.SourceFs)
+	err = helpers.WriteToDisk(filepath.Join(inpath, "theme.toml"), bytes.NewReader(by), hugofs.Source())
 	if err != nil {
 		return
 	}
@@ -309,8 +331,8 @@ func newContentPathSection(path string) (string, string) {
 }
 
 func createConfig(inpath string, kind string) (err error) {
-	in := map[string]string{
-		"baseurl":      "http://replace-this-with-your-hugo-site.com/",
+	in := map[string]interface{}{
+		"baseurl":      "http://example.org/",
 		"title":        "My New Hugo Site",
 		"languageCode": "en-us",
 	}
@@ -321,7 +343,7 @@ func createConfig(inpath string, kind string) (err error) {
 		return err
 	}
 
-	err = helpers.WriteToDisk(filepath.Join(inpath, "config."+kind), bytes.NewReader(by), hugofs.SourceFs)
+	err = helpers.WriteToDisk(filepath.Join(inpath, "config."+kind), bytes.NewReader(by), hugofs.Source())
 	if err != nil {
 		return
 	}

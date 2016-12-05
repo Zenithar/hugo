@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2016 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ func TestScpCache(t *testing.T) {
 			t.Errorf("There is content where there should not be anything: %s", string(c))
 		}
 
-		err = resWriteCache(test.path, test.content, fs)
+		err = resWriteCache(test.path, test.content, fs, test.ignore)
 		if err != nil {
 			t.Errorf("Error writing cache: %s", err)
 		}
@@ -72,7 +72,7 @@ func TestScpCache(t *testing.T) {
 				t.Errorf("Cache ignored but content is not nil: %s", string(c))
 			}
 		} else {
-			if bytes.Compare(c, test.content) != 0 {
+			if !bytes.Equal(c, test.content) {
 				t.Errorf("\nExpected: %s\nActual: %s\n", string(test.content), string(c))
 			}
 		}
@@ -104,7 +104,7 @@ func TestScpGetLocal(t *testing.T) {
 		if err != nil {
 			t.Errorf("Error getting resource content: %s", err)
 		}
-		if bytes.Compare(c, test.content) != 0 {
+		if !bytes.Equal(c, test.content) {
 			t.Errorf("\nExpected: %s\nActual: %s\n", string(test.content), string(c))
 		}
 	}
@@ -148,7 +148,7 @@ func TestScpGetRemote(t *testing.T) {
 		if err != nil {
 			t.Errorf("Error getting resource content: %s", err)
 		}
-		if bytes.Compare(c, test.content) != 0 {
+		if !bytes.Equal(c, test.content) {
 			t.Errorf("\nNet Expected: %s\nNet Actual: %s\n", string(test.content), string(c))
 		}
 		cc, cErr := resGetCache(test.path, fs, test.ignore)
@@ -160,7 +160,7 @@ func TestScpGetRemote(t *testing.T) {
 				t.Errorf("Cache ignored but content is not nil: %s", string(cc))
 			}
 		} else {
-			if bytes.Compare(cc, test.content) != 0 {
+			if !bytes.Equal(cc, test.content) {
 				t.Errorf("\nCache Expected: %s\nCache Actual: %s\n", string(test.content), string(cc))
 			}
 		}
@@ -213,12 +213,12 @@ type wd struct {
 }
 
 func testRetryWhenDone() wd {
-	cd := viper.GetString("CacheDir")
-	viper.Set("CacheDir", helpers.GetTempDir("", hugofs.SourceFs))
+	cd := viper.GetString("cacheDir")
+	viper.Set("cacheDir", helpers.GetTempDir("", hugofs.Source()))
 	var tmpSleep time.Duration
 	tmpSleep, resSleep = resSleep, time.Millisecond
 	return wd{func() {
-		viper.Set("CacheDir", cd)
+		viper.Set("cacheDir", cd)
 		resSleep = tmpSleep
 	}}
 }

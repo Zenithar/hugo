@@ -22,12 +22,12 @@ import (
 	"html/template"
 	"os/exec"
 	"regexp"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/miekg/mmark"
 	"github.com/mitchellh/mapstructure"
 	"github.com/russross/blackfriday"
-	"github.com/spf13/cast"
 	bp "github.com/spf13/hugo/bufferpool"
 	jww "github.com/spf13/jwalterweatherman"
 	"github.com/spf13/viper"
@@ -44,42 +44,54 @@ var SummaryDivider = []byte("<!--more-->")
 
 // Blackfriday holds configuration values for Blackfriday rendering.
 type Blackfriday struct {
-	Smartypants             bool
-	AngledQuotes            bool
-	Fractions               bool
-	HrefTargetBlank         bool
-	SmartDashes             bool
-	LatexDashes             bool
-	PlainIDAnchors          bool
-	SourceRelativeLinksEval bool
-	Extensions              []string
-	ExtensionsMask          []string
+	Smartypants                      bool
+	AngledQuotes                     bool
+	Fractions                        bool
+	HrefTargetBlank                  bool
+	SmartDashes                      bool
+	LatexDashes                      bool
+	TaskLists                        bool
+	PlainIDAnchors                   bool
+	SourceRelativeLinksEval          bool
+	SourceRelativeLinksProjectFolder string
+	Extensions                       []string
+	ExtensionsMask                   []string
 }
 
 // NewBlackfriday creates a new Blackfriday filled with site config or some sane defaults.
-func NewBlackfriday() *Blackfriday {
-	combinedParam := map[string]interface{}{
-		"smartypants":         true,
-		"angledQuotes":        false,
-		"fractions":           true,
-		"hrefTargetBlank":     false,
-		"smartDashes":         true,
-		"latexDashes":         true,
-		"plainIDAnchors":      false,
-		"sourceRelativeLinks": false,
+func NewBlackfriday(c ConfigProvider) *Blackfriday {
+
+	defaultParam := map[string]interface{}{
+		"smartypants":                      true,
+		"angledQuotes":                     false,
+		"fractions":                        true,
+		"hrefTargetBlank":                  false,
+		"smartDashes":                      true,
+		"latexDashes":                      true,
+		"plainIDAnchors":                   true,
+		"taskLists":                        true,
+		"sourceRelativeLinks":              false,
+		"sourceRelativeLinksProjectFolder": "/docs/content",
 	}
 
-	siteParam := viper.GetStringMap("blackfriday")
-	if siteParam != nil {
-		siteConfig := cast.ToStringMap(siteParam)
+	ToLowerMap(defaultParam)
 
-		for key, value := range siteConfig {
-			combinedParam[key] = value
+	siteParam := c.GetStringMap("blackfriday")
+
+	siteConfig := make(map[string]interface{})
+
+	for k, v := range defaultParam {
+		siteConfig[k] = v
+	}
+
+	if siteParam != nil {
+		for k, v := range siteParam {
+			siteConfig[k] = v
 		}
 	}
 
 	combinedConfig := &Blackfriday{}
-	if err := mapstructure.Decode(combinedParam, combinedConfig); err != nil {
+	if err := mapstructure.Decode(siteConfig, combinedConfig); err != nil {
 		jww.FATAL.Printf("Failed to get site rendering config\n%s", err.Error())
 	}
 
@@ -132,19 +144,28 @@ func StripHTML(s string) string {
 	// Walk through the string removing all tags
 	b := bp.GetBuffer()
 	defer bp.PutBuffer(b)
-
-	inTag := false
+	var inTag, isSpace, wasSpace bool
 	for _, r := range s {
-		switch r {
-		case '<':
+		if !inTag {
+			isSpace = false
+		}
+
+		switch {
+		case r == '<':
 			inTag = true
-		case '>':
+		case r == '>':
 			inTag = false
+		case unicode.IsSpace(r):
+			isSpace = true
+			fallthrough
 		default:
-			if !inTag {
+			if !inTag && (!isSpace || (isSpace && !wasSpace)) {
 				b.WriteRune(r)
 			}
 		}
+
+		wasSpace = isSpace
+
 	}
 	return b.String()
 }
@@ -162,8 +183,8 @@ func BytesToHTML(b []byte) template.HTML {
 // getHTMLRenderer creates a new Blackfriday HTML Renderer with the given configuration.
 func getHTMLRenderer(defaultFlags int, ctx *RenderingContext) blackfriday.Renderer {
 	renderParameters := blackfriday.HtmlRendererParameters{
-		FootnoteAnchorPrefix:       viper.GetString("FootnoteAnchorPrefix"),
-		FootnoteReturnLinkContents: viper.GetString("FootnoteReturnLinkContents"),
+		FootnoteAnchorPrefix:       viper.GetString("footnoteAnchorPrefix"),
+		FootnoteReturnLinkContents: viper.GetString("footnoteReturnLinkContents"),
 	}
 
 	b := len(ctx.DocumentID) != 0
@@ -202,9 +223,8 @@ func getHTMLRenderer(defaultFlags int, ctx *RenderingContext) blackfriday.Render
 	}
 
 	return &HugoHTMLRenderer{
-		FileResolver: ctx.FileResolver,
-		LinkResolver: ctx.LinkResolver,
-		Renderer:     blackfriday.HtmlRendererWithParameters(htmlFlags, "", "", renderParameters),
+		RenderingContext: ctx,
+		Renderer:         blackfriday.HtmlRendererWithParameters(htmlFlags, "", "", renderParameters),
 	}
 }
 
@@ -240,21 +260,20 @@ func getMarkdownExtensions(ctx *RenderingContext) int {
 }
 
 func markdownRender(ctx *RenderingContext) []byte {
+	if ctx.RenderTOC {
+		return blackfriday.Markdown(ctx.Content,
+			getHTMLRenderer(blackfriday.HTML_TOC, ctx),
+			getMarkdownExtensions(ctx))
+	}
 	return blackfriday.Markdown(ctx.Content, getHTMLRenderer(0, ctx),
-		getMarkdownExtensions(ctx))
-}
-
-func markdownRenderWithTOC(ctx *RenderingContext) []byte {
-	return blackfriday.Markdown(ctx.Content,
-		getHTMLRenderer(blackfriday.HTML_TOC, ctx),
 		getMarkdownExtensions(ctx))
 }
 
 // getMmarkHTMLRenderer creates a new mmark HTML Renderer with the given configuration.
 func getMmarkHTMLRenderer(defaultFlags int, ctx *RenderingContext) mmark.Renderer {
 	renderParameters := mmark.HtmlRendererParameters{
-		FootnoteAnchorPrefix:       viper.GetString("FootnoteAnchorPrefix"),
-		FootnoteReturnLinkContents: viper.GetString("FootnoteReturnLinkContents"),
+		FootnoteAnchorPrefix:       viper.GetString("footnoteAnchorPrefix"),
+		FootnoteReturnLinkContents: viper.GetString("footnoteReturnLinkContents"),
 	}
 
 	b := len(ctx.DocumentID) != 0
@@ -340,38 +359,29 @@ func ExtractTOC(content []byte) (newcontent []byte, toc []byte) {
 // RenderingContext holds contextual information, like content and configuration,
 // for a given content rendering.
 type RenderingContext struct {
-	Content      []byte
-	PageFmt      string
-	DocumentID   string
-	Config       *Blackfriday
-	FileResolver FileResolverFunc
-	LinkResolver LinkResolverFunc
-	configInit   sync.Once
+	Content        []byte
+	PageFmt        string
+	DocumentID     string
+	DocumentName   string
+	Config         *Blackfriday
+	RenderTOC      bool
+	FileResolver   FileResolverFunc
+	LinkResolver   LinkResolverFunc
+	ConfigProvider ConfigProvider
+	configInit     sync.Once
+}
+
+func newViperProvidedRenderingContext() *RenderingContext {
+	return &RenderingContext{ConfigProvider: viper.GetViper()}
 }
 
 func (c *RenderingContext) getConfig() *Blackfriday {
 	c.configInit.Do(func() {
 		if c.Config == nil {
-			c.Config = NewBlackfriday()
+			c.Config = NewBlackfriday(c.ConfigProvider)
 		}
 	})
 	return c.Config
-}
-
-// RenderBytesWithTOC renders a []byte with table of contents included.
-func RenderBytesWithTOC(ctx *RenderingContext) []byte {
-	switch ctx.PageFmt {
-	default:
-		return markdownRenderWithTOC(ctx)
-	case "markdown":
-		return markdownRenderWithTOC(ctx)
-	case "asciidoc":
-		return []byte(getAsciidocContent(ctx.Content))
-	case "mmark":
-		return mmarkRender(ctx)
-	case "rst":
-		return []byte(getRstContent(ctx.Content))
-	}
 }
 
 // RenderBytes renders a []byte.
@@ -382,16 +392,33 @@ func RenderBytes(ctx *RenderingContext) []byte {
 	case "markdown":
 		return markdownRender(ctx)
 	case "asciidoc":
-		return []byte(getAsciidocContent(ctx.Content))
+		return getAsciidocContent(ctx)
 	case "mmark":
 		return mmarkRender(ctx)
 	case "rst":
-		return []byte(getRstContent(ctx.Content))
+		return getRstContent(ctx)
 	}
 }
 
-// TotalWords returns an int of the total number of words in a given content.
+// TotalWords counts instance of one or more consecutive white space
+// characters, as defined by unicode.IsSpace, in s.
+// This is a cheaper way of word counting than the obvious len(strings.Fields(s)).
 func TotalWords(s string) int {
+	n := 0
+	inWord := false
+	for _, r := range s {
+		wasInWord := inWord
+		inWord = !unicode.IsSpace(r)
+		if inWord && !wasInWord {
+			n++
+		}
+	}
+	return n
+}
+
+// Old implementation only kept for benchmark comparison.
+// TODO(bep) remove
+func totalWordsOld(s string) int {
 	return len(strings.Fields(s))
 }
 
@@ -403,11 +430,6 @@ func WordCount(s string) map[string]int {
 	}
 
 	return m
-}
-
-// RemoveSummaryDivider removes summary-divider <!--more--> from content.
-func RemoveSummaryDivider(content []byte) []byte {
-	return bytes.Replace(content, SummaryDivider, []byte(""), -1)
 }
 
 // TruncateWordsByRune truncates words by runes.
@@ -436,10 +458,55 @@ func TruncateWordsByRune(words []string, max int) (string, bool) {
 	return strings.Join(words, " "), false
 }
 
-// TruncateWordsToWholeSentence takes content and an int
-// and returns entire sentences from content, delimited by the int
-// and whether it's truncated or not.
-func TruncateWordsToWholeSentence(words []string, max int) (string, bool) {
+// TruncateWordsToWholeSentence takes content and truncates to whole sentence
+// limited by max number of words. It also returns whether it is truncated.
+func TruncateWordsToWholeSentence(s string, max int) (string, bool) {
+
+	var (
+		wordCount     = 0
+		lastWordIndex = -1
+	)
+
+	for i, r := range s {
+		if unicode.IsSpace(r) {
+			wordCount++
+			lastWordIndex = i
+
+			if wordCount >= max {
+				break
+			}
+
+		}
+	}
+
+	if lastWordIndex == -1 {
+		return s, false
+	}
+
+	endIndex := -1
+
+	for j, r := range s[lastWordIndex:] {
+		if isEndOfSentence(r) {
+			endIndex = j + lastWordIndex + utf8.RuneLen(r)
+			break
+		}
+	}
+
+	if endIndex == -1 {
+		return s, false
+	}
+
+	return strings.TrimSpace(s[:endIndex]), endIndex < len(s)
+}
+
+func isEndOfSentence(r rune) bool {
+	return r == '.' || r == '?' || r == '!' || r == '"' || r == '\n'
+}
+
+// Kept only for benchmark.
+func truncateWordsToWholeSentenceOld(content string, max int) (string, bool) {
+	words := strings.Fields(content)
+
 	if max >= len(words) {
 		return strings.Join(words, " "), false
 	}
@@ -463,61 +530,112 @@ func ExtractFirstParagraph(content string) string {
 	return regexp.MustCompile("<h[123456]").Split(content, 2)[0]
 }
 
-// getAsciidocContent calls asciidoctor or asciidoc as an external helper
-// to convert AsciiDoc content to HTML.
-func getAsciidocContent(content []byte) string {
-	cleanContent := bytes.Replace(content, SummaryDivider, []byte(""), 1)
-
+func getAsciidocExecPath() string {
 	path, err := exec.LookPath("asciidoctor")
 	if err != nil {
 		path, err = exec.LookPath("asciidoc")
 		if err != nil {
-			jww.ERROR.Println("asciidoctor / asciidoc not found in $PATH: Please install.\n",
-				"                 Leaving AsciiDoc content unrendered.")
-			return (string(content))
+			return ""
 		}
 	}
-
-	jww.INFO.Println("Rendering with", path, "...")
-	cmd := exec.Command(path, "--no-header-footer", "--safe", "-")
-	cmd.Stdin = bytes.NewReader(cleanContent)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		jww.ERROR.Println(err)
-	}
-
-	return out.String()
+	return path
 }
 
-// getRstContent calls the Python script rst2html as an external helper
-// to convert reStructuredText content to HTML.
-func getRstContent(content []byte) string {
+// HasAsciidoc returns whether Asciidoctor or Asciidoc is installed on this computer.
+func HasAsciidoc() bool {
+	return getAsciidocExecPath() != ""
+}
+
+// getAsciidocContent calls asciidoctor or asciidoc as an external helper
+// to convert AsciiDoc content to HTML.
+func getAsciidocContent(ctx *RenderingContext) []byte {
+	content := ctx.Content
 	cleanContent := bytes.Replace(content, SummaryDivider, []byte(""), 1)
 
+	path := getAsciidocExecPath()
+	if path == "" {
+		jww.ERROR.Println("asciidoctor / asciidoc not found in $PATH: Please install.\n",
+			"                 Leaving AsciiDoc content unrendered.")
+		return content
+	}
+
+	jww.INFO.Println("Rendering", ctx.DocumentName, "with", path, "...")
+	cmd := exec.Command(path, "--no-header-footer", "--safe", "-")
+	cmd.Stdin = bytes.NewReader(cleanContent)
+	var out, cmderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &cmderr
+	err := cmd.Run()
+	// asciidoctor has exit code 0 even if there are errors in stderr
+	// -> log stderr output regardless of state of err
+	for _, item := range strings.Split(string(cmderr.Bytes()), "\n") {
+		item := strings.TrimSpace(item)
+		if item != "" {
+			jww.ERROR.Println(strings.Replace(item, "<stdin>", ctx.DocumentName, 1))
+		}
+	}
+	if err != nil {
+		jww.ERROR.Printf("%s rendering %s: %v", path, ctx.DocumentName, err)
+	}
+
+	return out.Bytes()
+}
+
+// HasRst returns whether rst2html is installed on this computer.
+func HasRst() bool {
+	return getRstExecPath() != ""
+}
+
+func getRstExecPath() string {
 	path, err := exec.LookPath("rst2html")
 	if err != nil {
 		path, err = exec.LookPath("rst2html.py")
 		if err != nil {
-			jww.ERROR.Println("rst2html / rst2html.py not found in $PATH: Please install.\n",
-				"                 Leaving reStructuredText content unrendered.")
-			return (string(content))
+			return ""
 		}
 	}
+	return path
+}
 
+// getRstContent calls the Python script rst2html as an external helper
+// to convert reStructuredText content to HTML.
+func getRstContent(ctx *RenderingContext) []byte {
+	content := ctx.Content
+	cleanContent := bytes.Replace(content, SummaryDivider, []byte(""), 1)
+
+	path := getRstExecPath()
+
+	if path == "" {
+		jww.ERROR.Println("rst2html / rst2html.py not found in $PATH: Please install.\n",
+			"                 Leaving reStructuredText content unrendered.")
+		return content
+
+	}
+
+	jww.INFO.Println("Rendering", ctx.DocumentName, "with", path, "...")
 	cmd := exec.Command(path, "--leave-comments")
 	cmd.Stdin = bytes.NewReader(cleanContent)
-	var out bytes.Buffer
+	var out, cmderr bytes.Buffer
 	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		jww.ERROR.Println(err)
-	}
-
-	rstLines := strings.Split(out.String(), "\n")
-	for i, line := range rstLines {
-		if strings.HasPrefix(line, "<body>") {
-			rstLines = (rstLines[i+1 : len(rstLines)-3])
+	cmd.Stderr = &cmderr
+	err := cmd.Run()
+	// By default rst2html exits w/ non-zero exit code only if severe, i.e.
+	// halting errors occurred. -> log stderr output regardless of state of err
+	for _, item := range strings.Split(string(cmderr.Bytes()), "\n") {
+		item := strings.TrimSpace(item)
+		if item != "" {
+			jww.ERROR.Println(strings.Replace(item, "<stdin>", ctx.DocumentName, 1))
 		}
 	}
-	return strings.Join(rstLines, "\n")
+	if err != nil {
+		jww.ERROR.Printf("%s rendering %s: %v", path, ctx.DocumentName, err)
+	}
+
+	result := out.Bytes()
+
+	// TODO(bep) check if rst2html has a body only option.
+	bodyStart := bytes.Index(result, []byte("<body>\n"))
+	bodyEnd := bytes.Index(result, []byte("\n</body>"))
+
+	return result[bodyStart+7 : bodyEnd]
 }

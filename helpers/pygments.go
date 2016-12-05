@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2016 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,15 +17,16 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"fmt"
-	"github.com/spf13/hugo/hugofs"
-	jww "github.com/spf13/jwalterweatherman"
-	"github.com/spf13/viper"
 	"io"
 	"io/ioutil"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/spf13/hugo/hugofs"
+	jww "github.com/spf13/jwalterweatherman"
+	"github.com/spf13/viper"
 )
 
 const pygmentsBin = "pygmentize"
@@ -41,7 +42,6 @@ func HasPygments() bool {
 
 // Highlight takes some code and returns highlighted code.
 func Highlight(code, lang, optsStr string) string {
-
 	if !HasPygments() {
 		jww.WARN.Println("Highlighting requires Pygments to be installed and in the path")
 		return code
@@ -60,12 +60,13 @@ func Highlight(code, lang, optsStr string) string {
 	io.WriteString(hash, lang)
 	io.WriteString(hash, options)
 
-	fs := hugofs.OsFs
+	fs := hugofs.Os()
 
-	cacheDir := viper.GetString("CacheDir")
+	ignoreCache := viper.GetBool("ignoreCache")
+	cacheDir := viper.GetString("cacheDir")
 	var cachefile string
 
-	if cacheDir != "" {
+	if !ignoreCache && cacheDir != "" {
 		cachefile = filepath.Join(cacheDir, fmt.Sprintf("pygments-%x", hash.Sum(nil)))
 
 		exists, err := Exists(cachefile, fs)
@@ -120,7 +121,7 @@ func Highlight(code, lang, optsStr string) string {
 		str = strings.Replace(str, "</pre>", "</code></pre>", 1)
 	}
 
-	if cachefile != "" {
+	if !ignoreCache && cachefile != "" {
 		// Write cache file
 		if err := WriteToDisk(cachefile, strings.NewReader(str), fs); err != nil {
 			jww.ERROR.Print(stderr.String())
@@ -154,6 +155,7 @@ func init() {
 	pygmentsKeywords["lineanchors"] = true
 	pygmentsKeywords["linespans"] = true
 	pygmentsKeywords["anchorlinenos"] = true
+	pygmentsKeywords["startinline"] = true
 }
 
 func parseOptions(options map[string]string, in string) error {
@@ -194,19 +196,18 @@ func createOptionsString(options map[string]string) string {
 }
 
 func parseDefaultPygmentsOpts() (map[string]string, error) {
-
 	options := make(map[string]string)
-	err := parseOptions(options, viper.GetString("PygmentsOptions"))
+	err := parseOptions(options, viper.GetString("pygmentsOptions"))
 	if err != nil {
 		return nil, err
 	}
 
-	if viper.IsSet("PygmentsStyle") {
-		options["style"] = viper.GetString("PygmentsStyle")
+	if viper.IsSet("pygmentsStyle") {
+		options["style"] = viper.GetString("pygmentsStyle")
 	}
 
-	if viper.IsSet("PygmentsUseClasses") {
-		if viper.GetBool("PygmentsUseClasses") {
+	if viper.IsSet("pygmentsUseClasses") {
+		if viper.GetBool("pygmentsUseClasses") {
 			options["noclasses"] = "false"
 		} else {
 			options["noclasses"] = "true"
@@ -222,7 +223,6 @@ func parseDefaultPygmentsOpts() (map[string]string, error) {
 }
 
 func parsePygmentsOpts(in string) (string, error) {
-
 	options, err := parseDefaultPygmentsOpts()
 	if err != nil {
 		return "", err

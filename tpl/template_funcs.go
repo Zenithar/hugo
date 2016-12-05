@@ -19,6 +19,7 @@ import (
 	"bytes"
 	_md5 "crypto/md5"
 	_sha1 "crypto/sha1"
+	_sha256 "crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,7 +27,9 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"image"
 	"math/rand"
+	"net/url"
 	"os"
 	"reflect"
 	"regexp"
@@ -37,14 +40,23 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"bitbucket.org/pkg/inflect"
-
+	"github.com/bep/inflect"
+	"github.com/spf13/afero"
 	"github.com/spf13/cast"
 	"github.com/spf13/hugo/helpers"
+	"github.com/spf13/hugo/hugofs"
 	jww "github.com/spf13/jwalterweatherman"
+	"github.com/spf13/viper"
+
+	// Importing image codecs for image.DecodeConfig
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 )
 
-var funcMap template.FuncMap
+var (
+	funcMap template.FuncMap
+)
 
 // eq returns the boolean truth of arg1 == arg2.
 func eq(x, y interface{}) bool {
@@ -359,6 +371,63 @@ func intersect(l1, l2 interface{}) (interface{}, error) {
 	}
 }
 
+// ResetCaches resets all caches that might be used during build.
+func ResetCaches() {
+	resetImageConfigCache()
+}
+
+// imageConfigCache is a lockable cache for image.Config objects. It must be
+// locked before reading or writing to config.
+var imageConfigCache struct {
+	sync.RWMutex
+	config map[string]image.Config
+}
+
+// resetImageConfigCache initializes and resets the imageConfig cache for the
+// imageConfig template function. This should be run once before every batch of
+// template renderers so the cache is cleared for new data.
+func resetImageConfigCache() {
+	imageConfigCache.Lock()
+	defer imageConfigCache.Unlock()
+
+	imageConfigCache.config = map[string]image.Config{}
+}
+
+// imageConfig returns the image.Config for the specified path relative to the
+// working directory. resetImageConfigCache must be run beforehand.
+func imageConfig(path interface{}) (image.Config, error) {
+	filename, err := cast.ToStringE(path)
+	if err != nil {
+		return image.Config{}, err
+	}
+
+	if filename == "" {
+		return image.Config{}, errors.New("imageConfig needs a filename")
+	}
+
+	// Check cache for image config.
+	imageConfigCache.RLock()
+	config, ok := imageConfigCache.config[filename]
+	imageConfigCache.RUnlock()
+
+	if ok {
+		return config, nil
+	}
+
+	f, err := hugofs.WorkingDir().Open(filename)
+	if err != nil {
+		return image.Config{}, err
+	}
+
+	config, _, err = image.DecodeConfig(f)
+
+	imageConfigCache.Lock()
+	imageConfigCache.config[filename] = config
+	imageConfigCache.Unlock()
+
+	return config, err
+}
+
 // in returns whether v is in the set l.  l may be an array or slice.
 func in(l interface{}, v interface{}) bool {
 	lv := reflect.ValueOf(l)
@@ -433,6 +502,25 @@ func first(limit interface{}, seq interface{}) (interface{}, error) {
 		limitv = seqv.Len()
 	}
 	return seqv.Slice(0, limitv).Interface(), nil
+}
+
+// findRE returns a list of strings that match the regular expression. By default all matches
+// will be included. The number of matches can be limitted with an optional third parameter.
+func findRE(expr string, content interface{}, limit ...int) ([]string, error) {
+	re, err := reCache.Get(expr)
+	if err != nil {
+		return nil, err
+	}
+
+	conv, err := cast.ToStringE(content)
+	if err != nil {
+		return nil, err
+	}
+	if len(limit) > 0 {
+		return re.FindAllString(conv, limit[0]), nil
+	}
+
+	return re.FindAllString(conv, -1), nil
 }
 
 // last returns the last N items in a rangeable list.
@@ -627,6 +715,7 @@ func checkCondition(v, mv reflect.Value, op string) (bool, error) {
 
 	var ivp, imvp *int64
 	var svp, smvp *string
+	var slv, slmv interface{}
 	var ima []int64
 	var sma []string
 	if mv.Type() == v.Type() {
@@ -649,6 +738,9 @@ func checkCondition(v, mv reflect.Value, op string) (bool, error) {
 				imv := toTimeUnix(mv)
 				imvp = &imv
 			}
+		case reflect.Array, reflect.Slice:
+			slv = v.Interface()
+			slmv = mv.Interface()
 		}
 	} else {
 		if mv.Kind() != reflect.Array && mv.Kind() != reflect.Slice {
@@ -746,70 +838,146 @@ func checkCondition(v, mv reflect.Value, op string) (bool, error) {
 			return !r, nil
 		}
 		return r, nil
+	case "intersect":
+		r, err := intersect(slv, slmv)
+		if err != nil {
+			return false, err
+		}
+
+		if reflect.TypeOf(r).Kind() == reflect.Slice {
+			s := reflect.ValueOf(r)
+
+			if s.Len() > 0 {
+				return true, nil
+			}
+			return false, nil
+		}
+		return false, errors.New("invalid intersect values")
 	default:
-		return false, errors.New("no such an operator")
+		return false, errors.New("no such operator")
 	}
 	return false, nil
 }
 
-// where returns a filtered subset of a given data type.
-func where(seq, key interface{}, args ...interface{}) (r interface{}, err error) {
-	seqv := reflect.ValueOf(seq)
-	kv := reflect.ValueOf(key)
-
-	var mv reflect.Value
-	var op string
+// parseWhereArgs parses the end arguments to the where function.  Return a
+// match value and an operator, if one is defined.
+func parseWhereArgs(args ...interface{}) (mv reflect.Value, op string, err error) {
 	switch len(args) {
 	case 1:
 		mv = reflect.ValueOf(args[0])
 	case 2:
 		var ok bool
 		if op, ok = args[0].(string); !ok {
-			return nil, errors.New("operator argument must be string type")
+			err = errors.New("operator argument must be string type")
+			return
 		}
 		op = strings.TrimSpace(strings.ToLower(op))
 		mv = reflect.ValueOf(args[1])
 	default:
-		return nil, errors.New("can't evaluate the array by no match argument or more than or equal to two arguments")
+		err = errors.New("can't evaluate the array by no match argument or more than or equal to two arguments")
 	}
+	return
+}
 
-	seqv, isNil := indirect(seqv)
+// checkWhereArray handles the where-matching logic when the seqv value is an
+// Array or Slice.
+func checkWhereArray(seqv, kv, mv reflect.Value, path []string, op string) (interface{}, error) {
+	rv := reflect.MakeSlice(seqv.Type(), 0, 0)
+	for i := 0; i < seqv.Len(); i++ {
+		var vvv reflect.Value
+		rvv := seqv.Index(i)
+		if kv.Kind() == reflect.String {
+			vvv = rvv
+			for _, elemName := range path {
+				var err error
+				vvv, err = evaluateSubElem(vvv, elemName)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			vv, _ := indirect(rvv)
+			if vv.Kind() == reflect.Map && kv.Type().AssignableTo(vv.Type().Key()) {
+				vvv = vv.MapIndex(kv)
+			}
+		}
+
+		if ok, err := checkCondition(vvv, mv, op); ok {
+			rv = reflect.Append(rv, rvv)
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	return rv.Interface(), nil
+}
+
+// checkWhereMap handles the where-matching logic when the seqv value is a Map.
+func checkWhereMap(seqv, kv, mv reflect.Value, path []string, op string) (interface{}, error) {
+	rv := reflect.MakeMap(seqv.Type())
+	keys := seqv.MapKeys()
+	for _, k := range keys {
+		elemv := seqv.MapIndex(k)
+		switch elemv.Kind() {
+		case reflect.Array, reflect.Slice:
+			r, err := checkWhereArray(elemv, kv, mv, path, op)
+			if err != nil {
+				return nil, err
+			}
+
+			switch rr := reflect.ValueOf(r); rr.Kind() {
+			case reflect.Slice:
+				if rr.Len() > 0 {
+					rv.SetMapIndex(k, elemv)
+				}
+			}
+		case reflect.Interface:
+			elemvv, isNil := indirect(elemv)
+			if isNil {
+				continue
+			}
+
+			switch elemvv.Kind() {
+			case reflect.Array, reflect.Slice:
+				r, err := checkWhereArray(elemvv, kv, mv, path, op)
+				if err != nil {
+					return nil, err
+				}
+
+				switch rr := reflect.ValueOf(r); rr.Kind() {
+				case reflect.Slice:
+					if rr.Len() > 0 {
+						rv.SetMapIndex(k, elemv)
+					}
+				}
+			}
+		}
+	}
+	return rv.Interface(), nil
+}
+
+// where returns a filtered subset of a given data type.
+func where(seq, key interface{}, args ...interface{}) (interface{}, error) {
+	seqv, isNil := indirect(reflect.ValueOf(seq))
 	if isNil {
 		return nil, errors.New("can't iterate over a nil value of type " + reflect.ValueOf(seq).Type().String())
 	}
 
+	mv, op, err := parseWhereArgs(args...)
+	if err != nil {
+		return nil, err
+	}
+
 	var path []string
+	kv := reflect.ValueOf(key)
 	if kv.Kind() == reflect.String {
 		path = strings.Split(strings.Trim(kv.String(), "."), ".")
 	}
 
 	switch seqv.Kind() {
 	case reflect.Array, reflect.Slice:
-		rv := reflect.MakeSlice(seqv.Type(), 0, 0)
-		for i := 0; i < seqv.Len(); i++ {
-			var vvv reflect.Value
-			rvv := seqv.Index(i)
-			if kv.Kind() == reflect.String {
-				vvv = rvv
-				for _, elemName := range path {
-					vvv, err = evaluateSubElem(vvv, elemName)
-					if err != nil {
-						return nil, err
-					}
-				}
-			} else {
-				vv, _ := indirect(rvv)
-				if vv.Kind() == reflect.Map && kv.Type().AssignableTo(vv.Type().Key()) {
-					vvv = vv.MapIndex(kv)
-				}
-			}
-			if ok, err := checkCondition(vvv, mv, op); ok {
-				rv = reflect.Append(rv, rvv)
-			} else if err != nil {
-				return nil, err
-			}
-		}
-		return rv.Interface(), nil
+		return checkWhereArray(seqv, kv, mv, path, op)
+	case reflect.Map:
+		return checkWhereMap(seqv, kv, mv, path, op)
 	default:
 		return nil, fmt.Errorf("can't iterate over %v", seq)
 	}
@@ -905,13 +1073,13 @@ func delimit(seq, delimiter interface{}, last ...interface{}) (template.HTML, er
 	}
 
 	var dLast *string
-	for _, l := range last {
+	if len(last) > 0 {
+		l := last[0]
 		dStr, err := cast.ToStringE(l)
 		if err != nil {
 			dLast = nil
 		}
 		dLast = &dStr
-		break
 	}
 
 	seqv := reflect.ValueOf(seq)
@@ -955,6 +1123,10 @@ func delimit(seq, delimiter interface{}, last ...interface{}) (template.HTML, er
 
 // sortSeq returns a sorted sequence.
 func sortSeq(seq interface{}, args ...interface{}) (interface{}, error) {
+	if seq == nil {
+		return nil, errors.New("sequence must be provided")
+	}
+
 	seqv := reflect.ValueOf(seq)
 	seqv, isNil := indirect(seqv)
 	if isNil {
@@ -991,10 +1163,9 @@ func sortSeq(seq interface{}, args ...interface{}) (interface{}, error) {
 	switch seqv.Kind() {
 	case reflect.Array, reflect.Slice:
 		for i := 0; i < seqv.Len(); i++ {
-			p.Pairs[i].Key = reflect.ValueOf(i)
 			p.Pairs[i].Value = seqv.Index(i)
 			if sortByField == "" || sortByField == "value" {
-				p.Pairs[i].SortByValue = p.Pairs[i].Value
+				p.Pairs[i].Key = p.Pairs[i].Value
 			} else {
 				v := p.Pairs[i].Value
 				var err error
@@ -1004,19 +1175,18 @@ func sortSeq(seq interface{}, args ...interface{}) (interface{}, error) {
 						return nil, err
 					}
 				}
-				p.Pairs[i].SortByValue = v
+				p.Pairs[i].Key = v
 			}
 		}
 
 	case reflect.Map:
 		keys := seqv.MapKeys()
 		for i := 0; i < seqv.Len(); i++ {
-			p.Pairs[i].Key = keys[i]
 			p.Pairs[i].Value = seqv.MapIndex(keys[i])
 			if sortByField == "" {
-				p.Pairs[i].SortByValue = p.Pairs[i].Key
+				p.Pairs[i].Key = keys[i]
 			} else if sortByField == "value" {
-				p.Pairs[i].SortByValue = p.Pairs[i].Value
+				p.Pairs[i].Key = p.Pairs[i].Value
 			} else {
 				v := p.Pairs[i].Value
 				var err error
@@ -1026,7 +1196,7 @@ func sortSeq(seq interface{}, args ...interface{}) (interface{}, error) {
 						return nil, err
 					}
 				}
-				p.Pairs[i].SortByValue = v
+				p.Pairs[i].Key = v
 			}
 		}
 	}
@@ -1037,9 +1207,8 @@ func sortSeq(seq interface{}, args ...interface{}) (interface{}, error) {
 // https://groups.google.com/forum/#!topic/golang-nuts/FT7cjmcL7gw
 // A data structure to hold a key/value pair.
 type pair struct {
-	Key         reflect.Value
-	Value       reflect.Value
-	SortByValue reflect.Value
+	Key   reflect.Value
+	Value reflect.Value
 }
 
 // A slice of pairs that implements sort.Interface to sort by Value.
@@ -1052,7 +1221,24 @@ type pairList struct {
 func (p pairList) Swap(i, j int) { p.Pairs[i], p.Pairs[j] = p.Pairs[j], p.Pairs[i] }
 func (p pairList) Len() int      { return len(p.Pairs) }
 func (p pairList) Less(i, j int) bool {
-	return lt(p.Pairs[i].SortByValue.Interface(), p.Pairs[j].SortByValue.Interface())
+	iv := p.Pairs[i].Key
+	jv := p.Pairs[j].Key
+
+	if iv.IsValid() {
+		if jv.IsValid() {
+			// can only call Interface() on valid reflect Values
+			return lt(iv.Interface(), jv.Interface())
+		}
+		// if j is invalid, test i against i's zero value
+		return lt(iv.Interface(), reflect.Zero(iv.Type()))
+	}
+
+	if jv.IsValid() {
+		// if i is invalid, test j against j's zero value
+		return lt(reflect.Zero(jv.Type()), jv.Interface())
+	}
+
+	return false
 }
 
 // sorts a pairList and returns a slice of sorted values
@@ -1112,6 +1298,12 @@ func returnWhenSet(a, k interface{}) interface{} {
 		}
 	}
 
+	avv, isNil = indirect(avv)
+
+	if isNil {
+		return ""
+	}
+
 	if avv.IsValid() {
 		switch avv.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -1143,11 +1335,20 @@ var markdownTrimPrefix = []byte("<p>")
 var markdownTrimSuffix = []byte("</p>\n")
 
 // markdownify renders a given string from Markdown to HTML.
-func markdownify(text string) template.HTML {
-	m := helpers.RenderBytes(&helpers.RenderingContext{Content: []byte(text), PageFmt: "markdown"})
+func markdownify(in interface{}) (template.HTML, error) {
+	text, err := cast.ToStringE(in)
+	if err != nil {
+		return "", err
+	}
+
+	language := viper.Get("currentContentLanguage").(*helpers.Language)
+
+	m := helpers.RenderBytes(&helpers.RenderingContext{
+		ConfigProvider: language,
+		Content:        []byte(text), PageFmt: "markdown"})
 	m = bytes.TrimPrefix(m, markdownTrimPrefix)
 	m = bytes.TrimSuffix(m, markdownTrimSuffix)
-	return template.HTML(m)
+	return template.HTML(m), nil
 }
 
 // jsonify encodes a given object to JSON.
@@ -1157,7 +1358,6 @@ func jsonify(v interface{}) (template.HTML, error) {
 		return "", err
 	}
 	return template.HTML(b), nil
-
 }
 
 // emojify "emojifies" the given string.
@@ -1257,6 +1457,52 @@ func replace(a, b, c interface{}) (string, error) {
 	return strings.Replace(aStr, bStr, cStr, -1), nil
 }
 
+// partialCache represents a cache of partials protected by a mutex.
+type partialCache struct {
+	sync.RWMutex
+	p map[string]template.HTML
+}
+
+// Get retrieves partial output from the cache based upon the partial name.
+// If the partial is not found in the cache, the partial is rendered and added
+// to the cache.
+func (c *partialCache) Get(key, name string, context interface{}) (p template.HTML) {
+	var ok bool
+
+	c.RLock()
+	p, ok = c.p[key]
+	c.RUnlock()
+
+	if ok {
+		return p
+	}
+
+	c.Lock()
+	if p, ok = c.p[key]; !ok {
+		p = partial(name, context)
+		c.p[key] = p
+	}
+	c.Unlock()
+
+	return p
+}
+
+var cachedPartials = partialCache{p: make(map[string]template.HTML)}
+
+// partialCached executes and caches partial templates.  An optional variant
+// string parameter (a string slice actually, but be only use a variadic
+// argument to make it optional) can be passed so that a given partial can have
+// multiple uses.  The cache is created with name+variant as the key.
+func partialCached(name string, context interface{}, variant ...string) template.HTML {
+	key := name
+	if len(variant) > 0 {
+		for i := 0; i < len(variant); i++ {
+			key += variant[i]
+		}
+	}
+	return cachedPartials.Get(key, name, context)
+}
+
 // regexpCache represents a cache of regexp objects protected by a mutex.
 type regexpCache struct {
 	mu sync.RWMutex
@@ -1318,6 +1564,16 @@ func replaceRE(pattern, repl, src interface{}) (_ string, err error) {
 	return re.ReplaceAllString(srcStr, replStr), nil
 }
 
+// asTime converts the textual representation of the datetime string into
+// a time.Time interface.
+func asTime(v interface{}) (interface{}, error) {
+	t, err := cast.ToTimeE(v)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 // dateFormat converts the textual representation of the datetime string into
 // the other form or returns it of the time.Time value. These are formatted
 // with the layout string
@@ -1338,7 +1594,7 @@ func dfault(dflt interface{}, given ...interface{}) (interface{}, error) {
 	// argument when the key is missing:  {{ index . "key" | default "foo" }}
 	// The Go template will complain that we got 1 argument when we expectd 2.
 
-	if given == nil || len(given) == 0 {
+	if len(given) == 0 {
 		return dflt, nil
 	}
 	if len(given) != 1 {
@@ -1420,13 +1676,13 @@ func prepareArg(value reflect.Value, argType reflect.Type) (reflect.Value, error
 func index(item interface{}, indices ...interface{}) (interface{}, error) {
 	v := reflect.ValueOf(item)
 	if !v.IsValid() {
-		return nil, fmt.Errorf("index of untyped nil")
+		return nil, errors.New("index of untyped nil")
 	}
 	for _, i := range indices {
 		index := reflect.ValueOf(i)
 		var isNil bool
 		if v, isNil = indirect(v); isNil {
-			return nil, fmt.Errorf("index of nil pointer")
+			return nil, errors.New("index of nil pointer")
 		}
 		switch v.Kind() {
 		case reflect.Array, reflect.Slice, reflect.String:
@@ -1437,7 +1693,7 @@ func index(item interface{}, indices ...interface{}) (interface{}, error) {
 			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 				x = int64(index.Uint())
 			case reflect.Invalid:
-				return nil, fmt.Errorf("cannot index slice/array with nil")
+				return nil, errors.New("cannot index slice/array with nil")
 			default:
 				return nil, fmt.Errorf("cannot index slice/array with type %s", index.Type())
 			}
@@ -1467,29 +1723,88 @@ func index(item interface{}, indices ...interface{}) (interface{}, error) {
 	return v.Interface(), nil
 }
 
+// readFile reads the file named by filename relative to the given basepath
+// and returns the contents as a string.
+// There is a upper size limit set at 1 megabytes.
+func readFile(fs *afero.BasePathFs, filename string) (string, error) {
+	if filename == "" {
+		return "", errors.New("readFile needs a filename")
+	}
+
+	if info, err := fs.Stat(filename); err == nil {
+		if info.Size() > 1000000 {
+			return "", fmt.Errorf("File %q is too big", filename)
+		}
+	} else {
+		return "", err
+	}
+	b, err := afero.ReadFile(fs, filename)
+
+	if err != nil {
+		return "", err
+	}
+
+	return string(b), nil
+}
+
+// readFileFromWorkingDir reads the file named by filename relative to the
+// configured WorkingDir.
+// It returns the contents as a string.
+// There is a upper size limit set at 1 megabytes.
+func readFileFromWorkingDir(i interface{}) (string, error) {
+	s, err := cast.ToStringE(i)
+	if err != nil {
+		return "", err
+	}
+	return readFile(hugofs.WorkingDir(), s)
+}
+
+// readDirFromWorkingDir listst the directory content relative to the
+// configured WorkingDir.
+func readDirFromWorkingDir(i interface{}) ([]os.FileInfo, error) {
+	path, err := cast.ToStringE(i)
+	if err != nil {
+		return nil, err
+	}
+
+	list, err := afero.ReadDir(hugofs.WorkingDir(), path)
+
+	if err != nil {
+		return nil, fmt.Errorf("Failed to read Directory %s with error message %s", path, err)
+	}
+
+	return list, nil
+}
+
 // safeHTMLAttr returns a given string as html/template HTMLAttr content.
-//
-// safeHTMLAttr is currently disabled, pending further discussion
-// on its use case.  2015-01-19
-func safeHTMLAttr(a interface{}) template.HTMLAttr {
-	return template.HTMLAttr(cast.ToString(a))
+func safeHTMLAttr(a interface{}) (template.HTMLAttr, error) {
+	s, err := cast.ToStringE(a)
+	return template.HTMLAttr(s), err
 }
 
 // safeCSS returns a given string as html/template CSS content.
-func safeCSS(a interface{}) template.CSS {
-	return template.CSS(cast.ToString(a))
+func safeCSS(a interface{}) (template.CSS, error) {
+	s, err := cast.ToStringE(a)
+	return template.CSS(s), err
 }
 
 // safeURL returns a given string as html/template URL content.
-func safeURL(a interface{}) template.URL {
-	return template.URL(cast.ToString(a))
+func safeURL(a interface{}) (template.URL, error) {
+	s, err := cast.ToStringE(a)
+	return template.URL(s), err
 }
 
 // safeHTML returns a given string as html/template HTML content.
-func safeHTML(a interface{}) template.HTML { return template.HTML(cast.ToString(a)) }
+func safeHTML(a interface{}) (template.HTML, error) {
+	s, err := cast.ToStringE(a)
+	return template.HTML(s), err
+}
 
 // safeJS returns the given string as a html/template JS content.
-func safeJS(a interface{}) template.JS { return template.JS(cast.ToString(a)) }
+func safeJS(a interface{}) (template.JS, error) {
+	s, err := cast.ToStringE(a)
+	return template.JS(s), err
+}
 
 // mod returns a % b.
 func mod(a, b interface{}) (int64, error) {
@@ -1590,12 +1905,26 @@ func countRunes(content interface{}) (int, error) {
 	return counter, nil
 }
 
-// humanize returns the humanized form of a single word.
+// humanize returns the humanized form of a single parameter.
+// If the parameter is either an integer or a string containing an integer
+// value, the behavior is to add the appropriate ordinal.
 // Example:  "my-first-post" -> "My first post"
+// Example:  "103" -> "103rd"
+// Example:  52 -> "52nd"
 func humanize(in interface{}) (string, error) {
 	word, err := cast.ToStringE(in)
 	if err != nil {
 		return "", err
+	}
+
+	if word == "" {
+		return "", nil
+	}
+
+	_, ok := in.(int)           // original param was literal int value
+	_, err = strconv.Atoi(word) // original param was string containing an int value
+	if ok || err == nil {
+		return inflect.Ordinalize(word), nil
 	}
 	return inflect.Humanize(word), nil
 }
@@ -1640,82 +1969,166 @@ func sha1(in interface{}) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-func init() {
+// sha256 hashes the given input and returns its SHA256 checksum
+func sha256(in interface{}) (string, error) {
+	conv, err := cast.ToStringE(in)
+	if err != nil {
+		return "", err
+	}
+
+	hash := _sha256.Sum256([]byte(conv))
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// querify encodes the given parameters  “URL encoded” form ("bar=baz&foo=quux") sorted by key.
+func querify(params ...interface{}) (string, error) {
+	qs := url.Values{}
+	vals, err := dictionary(params...)
+	if err != nil {
+		return "", errors.New("querify keys must be strings")
+	}
+
+	for name, value := range vals {
+		qs.Add(name, fmt.Sprintf("%v", value))
+	}
+
+	return qs.Encode(), nil
+}
+
+func htmlEscape(in interface{}) (string, error) {
+	conv, err := cast.ToStringE(in)
+	if err != nil {
+		return "", err
+	}
+	return html.EscapeString(conv), nil
+}
+
+func htmlUnescape(in interface{}) (string, error) {
+	conv, err := cast.ToStringE(in)
+	if err != nil {
+		return "", err
+	}
+	return html.UnescapeString(conv), nil
+}
+
+func absURL(a interface{}) (template.HTML, error) {
+	s, err := cast.ToStringE(a)
+	if err != nil {
+		return "", nil
+	}
+	return template.HTML(helpers.CurrentPathSpec().AbsURL(s, false)), nil
+}
+
+func relURL(a interface{}) (template.HTML, error) {
+	s, err := cast.ToStringE(a)
+	if err != nil {
+		return "", nil
+	}
+	return template.HTML(helpers.CurrentPathSpec().RelURL(s, false)), nil
+}
+
+func initFuncMap() {
 	funcMap = template.FuncMap{
-		"absURL":       func(a string) template.HTML { return template.HTML(helpers.AbsURL(a)) },
-		"add":          func(a, b interface{}) (interface{}, error) { return helpers.DoArithmetic(a, b, '+') },
-		"after":        after,
-		"apply":        apply,
-		"base64Decode": base64Decode,
-		"base64Encode": base64Encode,
-		"chomp":        chomp,
-		"countrunes":   countRunes,
-		"countwords":   countWords,
-		"default":      dfault,
-		"dateFormat":   dateFormat,
-		"delimit":      delimit,
-		"dict":         dictionary,
-		"div":          func(a, b interface{}) (interface{}, error) { return helpers.DoArithmetic(a, b, '/') },
-		"echoParam":    returnWhenSet,
-		"emojify":      emojify,
-		"eq":           eq,
-		"first":        first,
-		"ge":           ge,
-		"getCSV":       getCSV,
-		"getJSON":      getJSON,
-		"getenv":       func(varName string) string { return os.Getenv(varName) },
-		"gt":           gt,
-		"hasPrefix":    func(a, b string) bool { return strings.HasPrefix(a, b) },
-		"highlight":    highlight,
-		"humanize":     humanize,
-		"in":           in,
-		"index":        index,
-		"int":          func(v interface{}) int { return cast.ToInt(v) },
-		"intersect":    intersect,
-		"isSet":        isSet,
-		"isset":        isSet,
-		"jsonify":      jsonify,
-		"last":         last,
-		"le":           le,
-		"lower":        func(a string) string { return strings.ToLower(a) },
-		"lt":           lt,
-		"markdownify":  markdownify,
-		"md5":          md5,
-		"mod":          mod,
-		"modBool":      modBool,
-		"mul":          func(a, b interface{}) (interface{}, error) { return helpers.DoArithmetic(a, b, '*') },
-		"ne":           ne,
-		"partial":      partial,
-		"plainify":     plainify,
-		"pluralize":    pluralize,
-		"readDir":      readDir,
-		"ref":          ref,
-		"relURL":       func(a string) template.HTML { return template.HTML(helpers.RelURL(a)) },
+		"absURL": absURL,
+		"absLangURL": func(i interface{}) (template.HTML, error) {
+			s, err := cast.ToStringE(i)
+			if err != nil {
+				return "", err
+			}
+			return template.HTML(helpers.CurrentPathSpec().AbsURL(s, true)), nil
+		},
+		"add":           func(a, b interface{}) (interface{}, error) { return helpers.DoArithmetic(a, b, '+') },
+		"after":         after,
+		"apply":         apply,
+		"base64Decode":  base64Decode,
+		"base64Encode":  base64Encode,
+		"chomp":         chomp,
+		"countrunes":    countRunes,
+		"countwords":    countWords,
+		"default":       dfault,
+		"dateFormat":    dateFormat,
+		"delimit":       delimit,
+		"dict":          dictionary,
+		"div":           func(a, b interface{}) (interface{}, error) { return helpers.DoArithmetic(a, b, '/') },
+		"echoParam":     returnWhenSet,
+		"emojify":       emojify,
+		"eq":            eq,
+		"findRE":        findRE,
+		"first":         first,
+		"ge":            ge,
+		"getCSV":        getCSV,
+		"getJSON":       getJSON,
+		"getenv":        func(varName string) string { return os.Getenv(varName) },
+		"gt":            gt,
+		"hasPrefix":     func(a, b string) bool { return strings.HasPrefix(a, b) },
+		"highlight":     highlight,
+		"htmlEscape":    htmlEscape,
+		"htmlUnescape":  htmlUnescape,
+		"humanize":      humanize,
+		"imageConfig":   imageConfig,
+		"in":            in,
+		"index":         index,
+		"int":           func(v interface{}) (int, error) { return cast.ToIntE(v) },
+		"intersect":     intersect,
+		"isSet":         isSet,
+		"isset":         isSet,
+		"jsonify":       jsonify,
+		"last":          last,
+		"le":            le,
+		"lower":         func(a string) string { return strings.ToLower(a) },
+		"lt":            lt,
+		"markdownify":   markdownify,
+		"md5":           md5,
+		"mod":           mod,
+		"modBool":       modBool,
+		"mul":           func(a, b interface{}) (interface{}, error) { return helpers.DoArithmetic(a, b, '*') },
+		"ne":            ne,
+		"partial":       partial,
+		"partialCached": partialCached,
+		"plainify":      plainify,
+		"pluralize":     pluralize,
+		"querify":       querify,
+		"readDir":       readDirFromWorkingDir,
+		"readFile":      readFileFromWorkingDir,
+		"ref":           ref,
+		"relURL":        relURL,
+		"relLangURL": func(i interface{}) (template.HTML, error) {
+			s, err := cast.ToStringE(i)
+			if err != nil {
+				return "", err
+			}
+			return template.HTML(helpers.CurrentPathSpec().RelURL(s, true)), nil
+		},
 		"relref":       relRef,
 		"replace":      replace,
 		"replaceRE":    replaceRE,
 		"safeCSS":      safeCSS,
 		"safeHTML":     safeHTML,
+		"safeHTMLAttr": safeHTMLAttr,
 		"safeJS":       safeJS,
 		"safeURL":      safeURL,
 		"sanitizeURL":  helpers.SanitizeURL,
 		"sanitizeurl":  helpers.SanitizeURL,
 		"seq":          helpers.Seq,
 		"sha1":         sha1,
+		"sha256":       sha256,
 		"shuffle":      shuffle,
 		"singularize":  singularize,
 		"slice":        slice,
 		"slicestr":     slicestr,
 		"sort":         sortSeq,
 		"split":        split,
-		"string":       func(v interface{}) string { return cast.ToString(v) },
+		"string":       func(v interface{}) (string, error) { return cast.ToStringE(v) },
 		"sub":          func(a, b interface{}) (interface{}, error) { return helpers.DoArithmetic(a, b, '-') },
 		"substr":       substr,
 		"title":        func(a string) string { return strings.Title(a) },
+		"time":         asTime,
 		"trim":         trim,
 		"upper":        func(a string) string { return strings.ToUpper(a) },
-		"urlize":       helpers.URLize,
+		"urlize":       helpers.CurrentPathSpec().URLize,
 		"where":        where,
 		"colorize16":   helpers.Colorize16,
+		"i18n":         i18nTranslate,
+		"T":            i18nTranslate,
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2016 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,15 @@
 package source
 
 import (
-	"github.com/spf13/hugo/hugofs"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
+
+	"github.com/spf13/hugo/hugofs"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/spf13/viper"
 
@@ -65,6 +68,11 @@ func (f *Filesystem) Files() []*File {
 func (f *Filesystem) add(name string, reader io.Reader) (err error) {
 	var file *File
 
+	if runtime.GOOS == "darwin" {
+		// When a file system is HFS+, its filepath is in NFD form.
+		name = norm.NFC.String(name)
+	}
+
 	file, err = NewFileFromAbs(f.Base, name, reader)
 
 	if err == nil {
@@ -84,7 +92,7 @@ func (f *Filesystem) captureFiles() {
 			return err
 		}
 		if b {
-			rd, err := NewLazyFileReader(filePath)
+			rd, err := NewLazyFileReader(hugofs.Source(), filePath)
 			if err != nil {
 				return err
 			}
@@ -93,10 +101,13 @@ func (f *Filesystem) captureFiles() {
 		return err
 	}
 
-	err := helpers.SymbolicWalk(hugofs.SourceFs, f.Base, walker)
+	err := helpers.SymbolicWalk(hugofs.Source(), f.Base, walker)
 
 	if err != nil {
 		jww.ERROR.Println(err)
+		if err == helpers.ErrWalkRootTooShort {
+			panic("The root path is too short. If this is a test, make sure to init the content paths.")
+		}
 	}
 
 }
@@ -108,7 +119,7 @@ func (f *Filesystem) shouldRead(filePath string, fi os.FileInfo) (bool, error) {
 			jww.ERROR.Printf("Cannot read symbolic link '%s', error was: %s", filePath, err)
 			return false, nil
 		}
-		linkfi, err := os.Stat(link)
+		linkfi, err := hugofs.Source().Stat(link)
 		if err != nil {
 			jww.ERROR.Printf("Cannot stat '%s', error was: %s", link, err)
 			return false, nil
@@ -148,7 +159,7 @@ func isNonProcessablePath(filePath string) bool {
 		strings.HasSuffix(base, "~") {
 		return true
 	}
-	ignoreFiles := viper.GetStringSlice("IgnoreFiles")
+	ignoreFiles := viper.GetStringSlice("ignoreFiles")
 	if len(ignoreFiles) > 0 {
 		for _, ignorePattern := range ignoreFiles {
 			match, err := regexp.MatchString(ignorePattern, filePath)

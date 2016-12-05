@@ -65,8 +65,7 @@ Accessing the Page Parameter "bar"
 ## Variables
 
 Each Go template has a struct (object) made available to it. In Hugo, each
-template is passed either a page or a node struct depending on which type of
-page you are rendering. More details are available on the
+template is passed page struct. More details are available on the
 [variables](/layout/variables/) page.
 
 A variable is accessed by referencing the variable name.
@@ -267,7 +266,7 @@ access this from within the loop, you will likely want to do one of the followin
         {{ $title := .Site.Title }}
         {{ range .Params.tags }}
           <li>
-            <a href="{{ $baseurl }}/tags/{{ . | urlize }}">{{ . }}</a>
+            <a href="{{ $baseURL }}/tags/{{ . | urlize }}">{{ . }}</a>
             - {{ $title }}
           </li>
         {{ end }}
@@ -281,7 +280,7 @@ access this from within the loop, you will likely want to do one of the followin
 
         {{ range .Params.tags }}
           <li>
-            <a href="{{ $baseurl }}/tags/{{ . | urlize }}">{{ . }}</a>
+            <a href="{{ $baseURL }}/tags/{{ . | urlize }}">{{ . }}</a>
             - {{ $.Site.Title }}
           </li>
         {{ end }}
@@ -296,6 +295,38 @@ access this from within the loop, you will likely want to do one of the followin
     > *(No, don't do it!)*
     > You may, of course, recover from this mischief by using `{{ $ := . }}`
     > in a global context to reset `$` to its default value.
+
+## Whitespace
+
+Go 1.6 includes the ability to trim the whitespace from either side of a Go tag by including a hyphen (`-`) and space immediately beside the corresponding `{{` or `}}` delimiter.
+
+For instance, the following Go template:
+
+```html
+<div>
+  {{ .Title }}
+</div>
+```
+
+will include the newlines and horizontal tab in its HTML output:
+
+```html
+<div>
+  Hello, World!
+</div>
+```
+
+whereas using
+
+```html
+<div>
+  {{- .Title -}}
+</div>
+```
+
+in that case will output simply `<div>Hello, World!</div>`.
+
+Go considers the following characters as whitespace: space, horizontal tab, carriage return and newline.
 
 # Hugo Parameters
 
@@ -393,7 +424,7 @@ so, such as in this example:
 # Template example: Show only upcoming events
 
 Go allows you to do more than what's shown here.  Using Hugo's
-[`where`](/templates/functions/#toc_4) function and Go built-ins, we can list
+[`where`](/templates/functions/#where) function and Go built-ins, we can list
 only the items from `content/events/` whose date (set in the front matter) is in
 the future:
 

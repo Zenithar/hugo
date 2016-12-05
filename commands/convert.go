@@ -14,6 +14,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -83,19 +84,27 @@ func convertContents(mark rune) (err error) {
 	if err := InitializeConfig(); err != nil {
 		return err
 	}
-	site := &hugolib.Site{}
 
-	if err := site.Initialise(); err != nil {
+	h, err := hugolib.NewHugoSitesFromConfiguration()
+
+	if err != nil {
+		return err
+	}
+
+	site := h.Sites[0]
+
+	if err = site.Initialise(); err != nil {
 		return err
 	}
 
 	if site.Source == nil {
-		panic(fmt.Sprintf("site.Source not set"))
+		panic("site.Source not set")
 	}
 	if len(site.Source.Files()) < 1 {
-		return fmt.Errorf("No source files found")
+		return errors.New("No source files found")
 	}
 
+	contentDir := helpers.AbsPathify(viper.GetString("contentDir"))
 	jww.FEEDBACK.Println("processing", len(site.Source.Files()), "content files")
 	for _, file := range site.Source.Files() {
 		jww.INFO.Println("Attempting to convert", file.LogicalName())
@@ -127,15 +136,22 @@ func convertContents(mark rune) (err error) {
 			metadata = newmetadata
 		}
 
-		page.SetDir(filepath.Join(helpers.AbsPathify(viper.GetString("ContentDir")), file.Dir()))
+		page.SetDir(filepath.Join(contentDir, file.Dir()))
 		page.SetSourceContent(psr.Content())
-		page.SetSourceMetaData(metadata, mark)
+		if err = page.SetSourceMetaData(metadata, mark); err != nil {
+			jww.ERROR.Printf("Failed to set source metadata for file %q: %s. For more info see For more info see https://github.com/spf13/hugo/issues/2458", page.FullFilePath(), err)
+			continue
+		}
 
 		if outputDir != "" {
-			page.SaveSourceAs(filepath.Join(outputDir, page.FullFilePath()))
+			if err = page.SaveSourceAs(filepath.Join(outputDir, page.FullFilePath())); err != nil {
+				return fmt.Errorf("Failed to save file %q: %s", page.FullFilePath(), err)
+			}
 		} else {
 			if unsafe {
-				page.SaveSource()
+				if err = page.SaveSource(); err != nil {
+					return fmt.Errorf("Failed to save file %q: %s", page.FullFilePath(), err)
+				}
 			} else {
 				jww.FEEDBACK.Println("Unsafe operation not allowed, use --unsafe or set a different output path")
 			}

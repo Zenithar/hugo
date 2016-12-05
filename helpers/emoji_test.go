@@ -13,11 +13,13 @@
 package helpers
 
 import (
-	"github.com/kyokomi/emoji"
-	"github.com/spf13/hugo/bufferpool"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kyokomi/emoji"
+	"github.com/spf13/hugo/bufferpool"
 )
 
 func TestEmojiCustom(t *testing.T) {
@@ -25,29 +27,43 @@ func TestEmojiCustom(t *testing.T) {
 		input  string
 		expect []byte
 	}{
-		{"A :smile: a day", []byte(emoji.Sprint("A :smile: a day"))},
-		{"A few :smile:s a day", []byte(emoji.Sprint("A few :smile:s a day"))},
-		{"A :smile: and a :beer: makes the day for sure.", []byte(emoji.Sprint("A :smile: and a :beer: makes the day for sure."))},
-		{"A :smile: and: a :beer:", []byte(emoji.Sprint("A :smile: and: a :beer:"))},
-		{"A :diamond_shape_with_a_dot_inside: and then some.", []byte(emoji.Sprint("A :diamond_shape_with_a_dot_inside: and then some."))},
-		{":smile:", []byte(emoji.Sprint(":smile:"))},
+		{"A :smile: a day", []byte("A 😄 a day")},
+		{"A few :smile:s a day", []byte("A few 😄s a day")},
+		{"A :smile: and a :beer: makes the day for sure.", []byte("A 😄 and a 🍺 makes the day for sure.")},
+		{"A :smile: and: a :beer:", []byte("A 😄 and: a 🍺")},
+		{"A :diamond_shape_with_a_dot_inside: and then some.", []byte("A 💠 and then some.")},
+		{":smile:", []byte("😄")},
 		{":smi", []byte(":smi")},
-		{"A :smile:", []byte(emoji.Sprint("A :smile:"))},
-		{":beer:!", []byte(emoji.Sprint(":beer:!"))},
-		{"::smile:", []byte(emoji.Sprint("::smile:"))},
-		{":beer::", []byte(emoji.Sprint(":beer::"))},
-		{" :beer: :", []byte(emoji.Sprint(" :beer: :"))},
-		{":beer: and :smile: and another :beer:!", []byte(emoji.Sprint(":beer: and :smile: and another :beer:!"))},
-		{" :beer: : ", []byte(emoji.Sprint(" :beer: : "))},
+		{"A :smile:", []byte("A 😄")},
+		{":beer:!", []byte("🍺!")},
+		{"::smile:", []byte(":😄")},
+		{":beer::", []byte("🍺:")},
+		{" :beer: :", []byte(" 🍺 :")},
+		{":beer: and :smile: and another :beer:!", []byte("🍺 and 😄 and another 🍺!")},
+		{" :beer: : ", []byte(" 🍺 : ")},
 		{"No smilies for you!", []byte("No smilies for you!")},
 		{" The motto: no smiles! ", []byte(" The motto: no smiles! ")},
 		{":hugo_is_the_best_static_gen:", []byte(":hugo_is_the_best_static_gen:")},
-		{"은행 :smile: 은행", []byte(emoji.Sprint("은행 :smile: 은행"))},
+		{"은행 :smile: 은행", []byte("은행 😄 은행")},
+		// #2198
+		{"See: A :beer:!", []byte("See: A 🍺!")},
+		{`Aaaaaaaaaa: aaaaaaaaaa aaaaaaaaaa aaaaaaaaaa.
+
+:beer:`, []byte(`Aaaaaaaaaa: aaaaaaaaaa aaaaaaaaaa aaaaaaaaaa.
+
+🍺`)},
+		{"test :\n```bash\nthis is a test\n```\n\ntest\n\n:cool::blush:::pizza:\\:blush : : blush: :pizza:", []byte("test :\n```bash\nthis is a test\n```\n\ntest\n\n🆒😊:🍕\\:blush : : blush: 🍕")},
+		{
+			// 2391
+			"[a](http://gohugo.io) :smile: [r](http://gohugo.io/introduction/overview/) :beer:",
+			[]byte(`[a](http://gohugo.io) 😄 [r](http://gohugo.io/introduction/overview/) 🍺`),
+		},
 	} {
+
 		result := Emojify([]byte(this.input))
 
 		if !reflect.DeepEqual(result, this.expect) {
-			t.Errorf("[%d] got '%q' but expected %q", i, result, this.expect)
+			t.Errorf("[%d] got %q but expected %q", i, result, this.expect)
 		}
 
 	}
@@ -119,7 +135,10 @@ func doBenchmarkEmoji(b *testing.B, f func(in []byte) []byte) {
 			currIn := in[cnt]
 			cnt++
 			result := f(currIn.in)
-			if len(result) != len(currIn.expect) {
+			// The Emoji implementations gives slightly different output.
+			diffLen := len(result) - len(currIn.expect)
+			diffLen = int(math.Abs(float64(diffLen)))
+			if diffLen > 30 {
 				b.Fatalf("[%d] emoji std, got \n%q but expected \n%q", j, result, currIn.expect)
 			}
 		}

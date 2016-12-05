@@ -15,8 +15,9 @@ package helpers
 
 import (
 	"bytes"
-	"github.com/kyokomi/emoji"
 	"sync"
+
+	"github.com/kyokomi/emoji"
 )
 
 var (
@@ -33,7 +34,6 @@ var (
 // Note that the input byte slice will be modified if needed.
 // See http://www.emoji-cheat-sheet.com/
 func Emojify(source []byte) []byte {
-
 	emojiInit.Do(initEmoji)
 
 	start := 0
@@ -50,14 +50,11 @@ func Emojify(source []byte) []byte {
 		}
 
 		endEmoji := bytes.Index(source[j+1:upper], emojiDelim)
-
-		if endEmoji < 0 {
-			break
-		}
-
 		nextWordDelim := bytes.Index(source[j:upper], emojiWordDelim)
 
-		if endEmoji == 0 || (nextWordDelim != -1 && nextWordDelim < endEmoji) {
+		if endEmoji < 0 {
+			start++
+		} else if endEmoji == 0 || (nextWordDelim != -1 && nextWordDelim < endEmoji) {
 			start += endEmoji + 1
 		} else {
 			endKey := endEmoji + j + 2
@@ -78,14 +75,13 @@ func Emojify(source []byte) []byte {
 	}
 
 	return source
-
 }
 
 func initEmoji() {
 	emojiMap := emoji.CodeMap()
 
 	for k, v := range emojiMap {
-		emojis[k] = []byte(v + emoji.ReplacePadding)
+		emojis[k] = []byte(v)
 
 		if len(k) > emojiMaxSize {
 			emojiMaxSize = len(k)

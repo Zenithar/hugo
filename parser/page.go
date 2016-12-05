@@ -50,6 +50,8 @@ const (
 	HTMLCommentStart = "<!--"
 	// HTMLCommentEnd identifies the end of HTML comment.
 	HTMLCommentEnd = "-->"
+	// BOM Unicode byte order marker
+	BOM = '\ufeff'
 )
 
 var (
@@ -88,7 +90,7 @@ func (p *page) Metadata() (meta interface{}, err error) {
 	frontmatter := p.FrontMatter()
 
 	if len(frontmatter) != 0 {
-		fm := detectFrontMatter(rune(frontmatter[0]))
+		fm := DetectFrontMatter(rune(frontmatter[0]))
 		meta, err = fm.Parse(frontmatter)
 		if err != nil {
 			return
@@ -101,6 +103,10 @@ func (p *page) Metadata() (meta interface{}, err error) {
 func ReadFrom(r io.Reader) (p Page, err error) {
 	reader := bufio.NewReader(r)
 
+	// chomp BOM and assume UTF-8
+	if err = chompBOM(reader); err != nil && err != io.EOF {
+		return
+	}
 	if err = chompWhitespace(reader); err != nil && err != io.EOF {
 		return
 	}
@@ -135,6 +141,19 @@ func ReadFrom(r io.Reader) (p Page, err error) {
 	return newp, nil
 }
 
+func chompBOM(r io.RuneScanner) (err error) {
+	for {
+		c, _, err := r.ReadRune()
+		if err != nil {
+			return err
+		}
+		if c != BOM {
+			r.UnreadRune()
+			return nil
+		}
+	}
+}
+
 func chompWhitespace(r io.RuneScanner) (err error) {
 	for {
 		c, _, err := r.ReadRune()
@@ -162,7 +181,7 @@ func chompFrontmatterStartComment(r *bufio.Reader) (err error) {
 			return nil
 		}
 		testStr := strings.TrimSuffix(str[0:lineEnd], "\r")
-		if strings.Index(testStr, HTMLCommentEnd) != -1 {
+		if strings.Contains(testStr, HTMLCommentEnd) {
 			return nil
 		}
 		buf := make([]byte, lineEnd)
@@ -189,7 +208,7 @@ func chompFrontmatterEndComment(r *bufio.Reader) (err error) {
 		return nil
 	}
 	testStr := strings.TrimSuffix(str[0:lineEnd], "\r")
-	if strings.Index(testStr, HTMLCommentStart) != -1 {
+	if strings.Contains(testStr, HTMLCommentStart) {
 		return nil
 	}
 

@@ -119,6 +119,30 @@ func ReaderToBytes(lines io.Reader) []byte {
 	return bc
 }
 
+// ToLowerMap makes all the keys in the given map lower cased and will do so
+// recursively.
+// Notes:
+// * This will modify the map given.
+// * Any nested map[interface{}]interface{} will be converted to map[string]interface{}.
+func ToLowerMap(m map[string]interface{}) {
+	for k, v := range m {
+		switch v.(type) {
+		case map[interface{}]interface{}:
+			v = cast.ToStringMap(v)
+			ToLowerMap(v.(map[string]interface{}))
+		case map[string]interface{}:
+			ToLowerMap(v.(map[string]interface{}))
+		}
+
+		lKey := strings.ToLower(k)
+		if k != lKey {
+			delete(m, k)
+			m[lKey] = v
+		}
+
+	}
+}
+
 // ReaderToString is the same as ReaderToBytes, but returns a string.
 func ReaderToString(lines io.Reader) string {
 	if lines == nil {
@@ -128,16 +152,6 @@ func ReaderToString(lines io.Reader) string {
 	defer bp.PutBuffer(b)
 	b.ReadFrom(lines)
 	return b.String()
-}
-
-// StringToReader does the opposite of ReaderToString.
-func StringToReader(in string) io.Reader {
-	return strings.NewReader(in)
-}
-
-// BytesToReader does the opposite of ReaderToBytes.
-func BytesToReader(in []byte) io.Reader {
-	return bytes.NewReader(in)
 }
 
 // ReaderContains reports whether subslice is within r.
@@ -236,14 +250,32 @@ func NewDistinctFeedbackLogger() *DistinctLogger {
 	return &DistinctLogger{m: make(map[string]bool), logger: &jww.FEEDBACK}
 }
 
-// DistinctErrorLog cann be used to avoid spamming the logs with errors.
-var DistinctErrorLog = NewDistinctErrorLogger()
+var (
+	// DistinctErrorLog can be used to avoid spamming the logs with errors.
+	DistinctErrorLog = NewDistinctErrorLogger()
 
-// Deprecated logs ERROR logs about a deprecation, but only once for a given set of arguments' values.
-func Deprecated(object, item, alternative string) {
-	//	deprecatedLogger.Printf("%s's %s is deprecated and will be removed in Hugo %s. Use %s instead.", object, item, NextHugoReleaseVersion(), alternative)
-	DistinctErrorLog.Printf("%s's %s is deprecated and will be removed VERY SOON. Use %s instead.", object, item, alternative)
+	// DistinctFeedbackLog can be used to avoid spamming the logs with info messages.
+	DistinctFeedbackLog = NewDistinctFeedbackLogger()
+)
 
+// InitLoggers sets up the global distinct loggers.
+func InitLoggers() {
+	DistinctErrorLog = NewDistinctErrorLogger()
+}
+
+// Deprecated informs about a deprecation, but only once for a given set of arguments' values.
+// If the err flag is enabled, it logs as an ERROR (will exit with -1) and the text will
+// point at the next Hugo release.
+// The idea is two remove an item in two Hugo releases to give users and theme authors
+// plenty of time to fix their templates.
+func Deprecated(object, item, alternative string, err bool) {
+	if err {
+		DistinctErrorLog.Printf("%s's %s is deprecated and will be removed in Hugo %s. Use %s instead.", object, item, NextHugoReleaseVersion(), alternative)
+
+	} else {
+		// Make sure the users see this while avoiding build breakage. This will not lead to an os.Exit(-1)
+		DistinctFeedbackLog.Printf("WARNING: %s's %s is deprecated and will be removed in a future release. Use %s instead.", object, item, alternative)
+	}
 }
 
 // SliceToLower goes through the source slice and lowers all values.
@@ -476,4 +508,28 @@ func NormalizeHugoFlags(f *pflag.FlagSet, name string) pflag.NormalizedName {
 		break
 	}
 	return pflag.NormalizedName(name)
+}
+
+// DiffStringSlices returns the difference between two string slices.
+// Useful in tests.
+// See:
+// http://stackoverflow.com/questions/19374219/how-to-find-the-difference-between-two-slices-of-strings-in-golang
+func DiffStringSlices(slice1 []string, slice2 []string) []string {
+	diffStr := []string{}
+	m := map[string]int{}
+
+	for _, s1Val := range slice1 {
+		m[s1Val] = 1
+	}
+	for _, s2Val := range slice2 {
+		m[s2Val] = m[s2Val] + 1
+	}
+
+	for mKey, mVal := range m {
+		if mVal == 1 {
+			diffStr = append(diffStr, mKey)
+		}
+	}
+
+	return diffStr
 }
